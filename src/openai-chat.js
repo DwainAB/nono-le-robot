@@ -1,6 +1,6 @@
 import { config } from "./config.js";
 
-export async function createAssistantReply({ message, sessionId, language, history, locationContext }) {
+export async function createAssistantReply({ message, sessionId, language, history, locationContext, navigableContext }) {
   if (!config.openAiApiKey) {
     return null;
   }
@@ -12,7 +12,8 @@ export async function createAssistantReply({ message, sessionId, language, histo
     "Tu reponds en phrases courtes, naturelles et faciles a dire a l'oral.",
     "Tu n'utilises ni markdown, ni listes, ni emojis.",
     `Tu reponds uniquement dans la langue demandee: ${targetLanguage}.`,
-    "Si un emplacement magasin est fourni, tu dois l'utiliser tel quel et proposer de guider le client.",
+    "Tu n'inventes jamais un emplacement magasin.",
+    "Tu ne proposes un guidage que si le contexte indique explicitement qu'un point robot existe pour ce lieu.",
     "Si tu ne sais pas, dis simplement que tu vas demander plus de precision."
   ].join(" ");
 
@@ -34,6 +35,7 @@ export async function createAssistantReply({ message, sessionId, language, histo
     `Langue: ${targetLanguage}`,
     `Session: ${sessionId}`,
     locationContext ? `Contexte emplacement: ${locationContext}` : null,
+    navigableContext ? `Points robot disponibles: ${navigableContext}` : null,
     `Message utilisateur: ${message}`
   ]
     .filter(Boolean)

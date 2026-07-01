@@ -136,6 +136,69 @@ function buildLocationReply(location, language) {
   }
 }
 
+function buildLocationOnlyReply(location, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const locationName = localizeLocationName(location, resolvedLanguage);
+  const locationZone = localizeLocationZone(location, resolvedLanguage);
+  const locationDetails = localizeLocationDetails(location, resolvedLanguage);
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `The ${locationName} are in ${locationZone}, ${locationDetails}.`;
+    case "zh":
+      return `${locationName}在${locationZone}，${locationDetails}。`;
+    case "ar":
+      return `${locationName} موجودة في ${locationZone}، ${locationDetails}.`;
+    case "fr":
+    default:
+      return `Les ${locationName} sont au ${locationZone}, ${locationDetails}.`;
+  }
+}
+
+function buildUnknownLocationReply(language) {
+  switch (normalizeLanguage(language)) {
+    case "en":
+      return "I do not know where it is at the moment.";
+    case "zh":
+      return "我暂时不知道它在哪里。";
+    case "ar":
+      return "لا أعرف أين يوجد هذا المكان الآن.";
+    case "fr":
+    default:
+      return "Je ne sais pas ou cela se trouve pour le moment.";
+  }
+}
+
+function isLocationIntent(message, language) {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  const patterns = {
+    fr: [/ou sont?/i, /je cherche/i, /ou se trouvent?/i, /je voudrais/i],
+    en: [/where is/i, /where are/i, /i am looking for/i, /i want/i],
+    zh: [/在哪/i, /我想找/i, /有没有/i],
+    ar: [/اين/i, /أين/i, /ابحث عن/i, /أريد/i]
+  };
+
+  return (patterns[normalizeLanguage(language)] || patterns.fr).some((pattern) => pattern.test(normalized));
+}
+
+function buildNavigableContext(language, navigableLocations) {
+  const resolvedLanguage = normalizeLanguage(language);
+  if (!navigableLocations.length) {
+    return null;
+  }
+
+  return navigableLocations
+    .map((item) => {
+      const name = item.labels?.[resolvedLanguage]?.name || item.name;
+      const zone = item.labels?.[resolvedLanguage]?.zone || item.zone;
+      const details = item.labels?.[resolvedLanguage]?.details || item.details;
+      return `${name}: ${zone}, ${details}`;
+    })
+    .join(" ; ");
+}
+
 function buildFallbackReply(message, language) {
   const resolvedLanguage = normalizeLanguage(language);
 
@@ -180,7 +243,7 @@ function buildLocationContextText(language) {
     .join(" ; ");
 }
 
-export async function handleChat({ message, sessionId, language = "fr" }) {
+export async function handleChat({ message, sessionId, language = "fr", navigableLocationIds = [] }) {
   const trimmedMessage = String(message || "").trim();
   if (!trimmedMessage) {
     throw new Error("Message vide");
@@ -191,6 +254,9 @@ export async function handleChat({ message, sessionId, language = "fr" }) {
   const matchedLocation = findLocationFromMessage(trimmedMessage);
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
+  const navigableSet = new Set((Array.isArray(navigableLocationIds) ? navigableLocationIds : []).map((item) => String(item)));
+  const allLocations = listKnownLocations();
+  const navigableLocations = allLocations.filter((item) => navigableSet.has(item.id));
 
   pushHistory(session.sessionId, "user", trimmedMessage);
 
@@ -198,17 +264,24 @@ export async function handleChat({ message, sessionId, language = "fr" }) {
   let action = null;
 
   if (matchedLocation) {
-    reply = buildLocationReply(matchedLocation, resolvedLanguage);
-    action = {
-      type: "navigate",
-      destination: matchedLocation.zone,
-      locationId: matchedLocation.id
-    };
+    if (navigableSet.has(matchedLocation.id)) {
+      reply = buildLocationReply(matchedLocation, resolvedLanguage);
+      action = {
+        type: "navigate",
+        destination: matchedLocation.zone,
+        locationId: matchedLocation.id
+      };
+    } else {
+      reply = buildLocationOnlyReply(matchedLocation, resolvedLanguage);
+    }
   } else if (extractedFirstName) {
     updateFirstName(session.sessionId, extractedFirstName);
     reply = buildGreetingWithFirstName(extractedFirstName, resolvedLanguage);
+  } else if (isLocationIntent(trimmedMessage, resolvedLanguage)) {
+    reply = buildUnknownLocationReply(resolvedLanguage);
   } else {
     const locationNames = buildLocationContextText(resolvedLanguage);
+    const navigableContext = buildNavigableContext(resolvedLanguage, navigableLocations);
 
     reply =
       (await createAssistantReply({
@@ -216,7 +289,8 @@ export async function handleChat({ message, sessionId, language = "fr" }) {
         sessionId: session.sessionId,
         language: resolvedLanguage,
         history,
-        locationContext: locationNames
+        locationContext: locationNames,
+        navigableContext
       })) || buildFallbackReply(trimmedMessage, resolvedLanguage);
   }
 
