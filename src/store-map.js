@@ -5,22 +5,28 @@ const storeMapPath = path.resolve(process.cwd(), "data", "store-map.json");
 const storeMap = JSON.parse(fs.readFileSync(storeMapPath, "utf8"));
 
 function normalize(value) {
-  return value
+  return String(value || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
 export function findLocationFromMessage(message) {
   const normalizedMessage = normalize(message);
+  if (!normalizedMessage) {
+    return null;
+  }
 
   for (const location of storeMap.locations) {
     const candidates = [location.name, ...(location.synonyms || [])];
     for (const candidate of candidates) {
       const normalizedCandidate = normalize(candidate);
+      if (!normalizedCandidate) {
+        continue;
+      }
       if (
         normalizedMessage.includes(normalizedCandidate) ||
         normalizedCandidate.includes(normalizedMessage)
@@ -34,10 +40,11 @@ export function findLocationFromMessage(message) {
 }
 
 export function listKnownLocations() {
-  return storeMap.locations.map(({ id, name, zone, details }) => ({
+  return storeMap.locations.map(({ id, name, zone, details, labels }) => ({
     id,
     name,
     zone,
-    details
+    details,
+    labels
   }));
 }

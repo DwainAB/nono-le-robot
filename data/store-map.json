@@ -4,36 +4,61 @@
       "id": "heels",
       "name": "talons",
       "zone": "rayon chaussures",
-      "details": "allee 3",
-      "synonyms": ["talon", "talons", "chaussures a talons", "escarpins", "heels", "high heels"]
+      "details": "allee 2",
+      "synonyms": ["talon", "talons", "chaussures a talons", "escarpins", "heels", "high heels", "高跟鞋", "كعب", "أحذية بكعب"],
+      "labels": {
+        "en": { "name": "heels", "zone": "the shoe section", "details": "aisle 2" },
+        "zh": { "name": "高跟鞋", "zone": "鞋履区", "details": "2号过道" },
+        "ar": { "name": "الأحذية ذات الكعب", "zone": "قسم الأحذية", "details": "الممر 2" }
+      }
     },
     {
       "id": "sneakers",
       "name": "baskets",
       "zone": "rayon chaussures",
       "details": "allee 2",
-      "synonyms": ["basket", "baskets", "sneakers", "tennis"]
+      "synonyms": ["basket", "baskets", "sneakers", "tennis", "运动鞋", "أحذية رياضية"],
+      "labels": {
+        "en": { "name": "sneakers", "zone": "the shoe section", "details": "aisle 2" },
+        "zh": { "name": "运动鞋", "zone": "鞋履区", "details": "2号过道" },
+        "ar": { "name": "الأحذية الرياضية", "zone": "قسم الأحذية", "details": "الممر 2" }
+      }
     },
     {
       "id": "bags",
       "name": "sacs",
       "zone": "maroquinerie",
       "details": "allee 5",
-      "synonyms": ["sac", "sacs", "sac a main", "bags", "handbag"]
+      "synonyms": ["sac", "sacs", "sac a main", "bags", "handbag", "包", "手袋", "حقائب", "حقيبة"],
+      "labels": {
+        "en": { "name": "bags", "zone": "the leather goods section", "details": "aisle 5" },
+        "zh": { "name": "包袋", "zone": "皮具区", "details": "5号过道" },
+        "ar": { "name": "الحقائب", "zone": "قسم المنتجات الجلدية", "details": "الممر 5" }
+      }
     },
     {
       "id": "checkout",
       "name": "caisse",
       "zone": "accueil principal",
       "details": "au fond a droite",
-      "synonyms": ["caisse", "paiement", "checkout", "cashier"]
+      "synonyms": ["caisse", "paiement", "checkout", "cashier", "收银台", "付款", "الدفع", "الصندوق"],
+      "labels": {
+        "en": { "name": "checkout", "zone": "the main welcome area", "details": "at the back on the right" },
+        "zh": { "name": "收银台", "zone": "主接待区", "details": "最里面靠右" },
+        "ar": { "name": "صندوق الدفع", "zone": "منطقة الاستقبال الرئيسية", "details": "في الخلف على اليمين" }
+      }
     },
     {
       "id": "restroom",
       "name": "toilettes",
       "zone": "espace services",
       "details": "au fond a gauche",
-      "synonyms": ["toilettes", "wc", "restroom", "toilet"]
+      "synonyms": ["toilettes", "wc", "restroom", "toilet", "洗手间", "卫生间", "الحمام", "دورات المياه"],
+      "labels": {
+        "en": { "name": "restrooms", "zone": "the service area", "details": "at the back on the left" },
+        "zh": { "name": "洗手间", "zone": "服务区", "details": "最里面靠左" },
+        "ar": { "name": "دورات المياه", "zone": "منطقة الخدمات", "details": "في الخلف على اليسار" }
+      }
     }
   ]
 }
