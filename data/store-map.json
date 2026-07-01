@@ -1,0 +1,39 @@
+{
+  "locations": [
+    {
+      "id": "heels",
+      "name": "talons",
+      "zone": "rayon chaussures",
+      "details": "allee 3",
+      "synonyms": ["talon", "talons", "chaussures a talons", "escarpins", "heels", "high heels"]
+    },
+    {
+      "id": "sneakers",
+      "name": "baskets",
+      "zone": "rayon chaussures",
+      "details": "allee 2",
+      "synonyms": ["basket", "baskets", "sneakers", "tennis"]
+    },
+    {
+      "id": "bags",
+      "name": "sacs",
+      "zone": "maroquinerie",
+      "details": "allee 5",
+      "synonyms": ["sac", "sacs", "sac a main", "bags", "handbag"]
+    },
+    {
+      "id": "checkout",
+      "name": "caisse",
+      "zone": "accueil principal",
+      "details": "au fond a droite",
+      "synonyms": ["caisse", "paiement", "checkout", "cashier"]
+    },
+    {
+      "id": "restroom",
+      "name": "toilettes",
+      "zone": "espace services",
+      "details": "au fond a gauche",
+      "synonyms": ["toilettes", "wc", "restroom", "toilet"]
+    }
+  ]
+}
