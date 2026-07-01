@@ -7,21 +7,73 @@ const sessions = new Map();
 function getSession(sessionId) {
   const resolvedSessionId = sessionId || crypto.randomUUID();
   if (!sessions.has(resolvedSessionId)) {
-    sessions.set(resolvedSessionId, []);
+    sessions.set(resolvedSessionId, {
+      history: [],
+      firstName: null
+    });
   }
   return {
     sessionId: resolvedSessionId,
-    history: sessions.get(resolvedSessionId)
+    session: sessions.get(resolvedSessionId)
   };
 }
 
 function pushHistory(sessionId, role, content) {
-  const history = sessions.get(sessionId) || [];
+  const session = sessions.get(sessionId) || { history: [], firstName: null };
+  const history = session.history || [];
   history.push({ role, content });
   if (history.length > 20) {
     history.splice(0, history.length - 20);
   }
-  sessions.set(sessionId, history);
+  sessions.set(sessionId, {
+    ...session,
+    history
+  });
+}
+
+function updateFirstName(sessionId, firstName) {
+  const session = sessions.get(sessionId) || { history: [], firstName: null };
+  sessions.set(sessionId, {
+    ...session,
+    firstName
+  });
+}
+
+function formatFirstName(value) {
+  if (!value) return value;
+  const cleaned = value
+    .trim()
+    .replace(/[^a-zA-ZÀ-ÿ' -]/g, "")
+    .replace(/\s+/g, " ");
+  if (!cleaned) return null;
+  return cleaned
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function extractFirstName(message) {
+  const normalized = String(message || "").trim();
+  if (!normalized) return null;
+
+  const directPatterns = [
+    /(?:je m'appelle|moi c'est|mon prenom est|mon prénom est)\s+([a-zA-ZÀ-ÿ' -]+)/i,
+    /(?:i am|my name is|i'm)\s+([a-zA-ZÀ-ÿ' -]+)/i
+  ];
+
+  for (const pattern of directPatterns) {
+    const match = normalized.match(pattern);
+    if (match?.[1]) {
+      return formatFirstName(match[1].split(/\s+/)[0]);
+    }
+  }
+
+  if (/^[a-zA-ZÀ-ÿ' -]{2,40}$/.test(normalized)) {
+    return formatFirstName(normalized.split(/\s+/)[0]);
+  }
+
+  return null;
 }
 
 function buildLocationReply(location) {
@@ -43,14 +95,19 @@ export async function handleChat({ message, sessionId, language = "fr" }) {
   }
 
   const session = getSession(sessionId);
+  const history = session.session.history;
   const matchedLocation = findLocationFromMessage(trimmedMessage);
+  const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
 
   pushHistory(session.sessionId, "user", trimmedMessage);
 
   let reply;
   let action = null;
 
-  if (matchedLocation) {
+  if (extractedFirstName) {
+    updateFirstName(session.sessionId, extractedFirstName);
+    reply = `Bonjour ${extractedFirstName}, en quoi puis-je vous aider ?`;
+  } else if (matchedLocation) {
     reply = buildLocationReply(matchedLocation);
     action = {
       type: "navigate",
@@ -67,7 +124,7 @@ export async function handleChat({ message, sessionId, language = "fr" }) {
         message: trimmedMessage,
         sessionId: session.sessionId,
         language,
-        history: session.history,
+        history,
         locationContext: locationNames
       })) || buildFallbackReply(trimmedMessage);
   }
