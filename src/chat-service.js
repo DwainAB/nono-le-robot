@@ -106,14 +106,14 @@ function localizeLocationDetails(location, language) {
 function buildGreetingWithFirstName(firstName, language) {
   switch (normalizeLanguage(language)) {
     case "en":
-      return `Hello ${firstName}, how can I help you?`;
+      return "Hello, how can I help you?";
     case "zh":
-      return `${firstName}，您好，我可以怎么帮助您？`;
+      return "您好，我可以怎么帮助您？";
     case "ar":
-      return `مرحبًا ${firstName}، كيف يمكنني مساعدتك؟`;
+      return "مرحبًا، كيف يمكنني مساعدتك؟";
     case "fr":
     default:
-      return `Bonjour ${firstName}, en quoi puis-je vous aider ?`;
+      return "Bonjour, en quoi puis-je vous aider ?";
   }
 }
 
@@ -166,6 +166,20 @@ function buildUnknownLocationReply(language) {
     case "fr":
     default:
       return "Je ne sais pas ou cela se trouve pour le moment.";
+  }
+}
+
+function buildGenericHelpReply(language) {
+  switch (normalizeLanguage(language)) {
+    case "en":
+      return "Hello, how can I help you?";
+    case "zh":
+      return "您好，我可以怎么帮助您？";
+    case "ar":
+      return "مرحبًا، كيف يمكنني مساعدتك؟";
+    case "fr":
+    default:
+      return "Bonjour, en quoi puis-je vous aider ?";
   }
 }
 
@@ -275,8 +289,8 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       reply = buildLocationOnlyReply(matchedLocation, resolvedLanguage);
     }
   } else if (extractedFirstName) {
-    updateFirstName(session.sessionId, extractedFirstName);
-    reply = buildGreetingWithFirstName(extractedFirstName, resolvedLanguage);
+    updateFirstName(session.sessionId, extractedFirstName || trimmedMessage);
+    reply = buildGenericHelpReply(resolvedLanguage);
   } else if (isLocationIntent(trimmedMessage, resolvedLanguage)) {
     reply = buildUnknownLocationReply(resolvedLanguage);
   } else {
