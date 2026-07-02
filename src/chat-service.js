@@ -1,11 +1,12 @@
 import crypto from "node:crypto";
-import { createAssistantReply } from "./openai-chat.js";
+import { createAssistantReply, resolveCatalogMatch } from "./openai-chat.js";
 import {
   buildLocationContextText,
   buildStoreInformationContextText,
   findLocationFromMessage,
   findStoreInformationFromMessage,
-  listKnownLocations
+  listKnownLocations,
+  listStoreInformation
 } from "./store-map.js";
 
 const sessions = new Map();
@@ -125,23 +126,23 @@ function buildGreetingWithFirstName(firstName, language) {
 
 function buildPlaceDescription(location, language) {
   const resolvedLanguage = normalizeLanguage(language);
-  const zone = location.zone;
-  const details = location.details;
-  const floorLabel = location.floorLabel;
+  const primaryInfo = location.details || location.description || location.zone || location.floorLabel || "";
 
-  if (resolvedLanguage === "en") {
-    return [zone, details, floorLabel].filter(Boolean).join(", ");
+  if (!primaryInfo) {
+    switch (resolvedLanguage) {
+      case "en":
+        return "this place";
+      case "zh":
+        return "这个位置";
+      case "ar":
+        return "هذا المكان";
+      case "fr":
+      default:
+        return "cet endroit";
+    }
   }
 
-  if (resolvedLanguage === "zh") {
-    return [zone, details, floorLabel].filter(Boolean).join("，");
-  }
-
-  if (resolvedLanguage === "ar") {
-    return [zone, details, floorLabel].filter(Boolean).join("، ");
-  }
-
-  return [zone, details, floorLabel].filter(Boolean).join(", ");
+  return primaryInfo;
 }
 
 function buildLocationReply(match, language) {
@@ -152,14 +153,14 @@ function buildLocationReply(match, language) {
 
   switch (resolvedLanguage) {
     case "en":
-      return `You can find ${subject} in ${place}. I can take you there if you want.`;
+      return `You can find ${subject} at ${place}. I can take you there if you want.`;
     case "zh":
       return `您可以在${place}找到${subject}。如果您愿意，我可以带您过去。`;
     case "ar":
       return `يمكنك العثور على ${subject} في ${place}. يمكنني أن آخذك إليها إذا أردت.`;
     case "fr":
     default:
-      return `Vous trouverez ${subject} dans ${place}. Je peux vous y guider si vous voulez.`;
+      return `Vous trouverez ${subject} à ${place}. Je peux vous y guider si vous voulez.`;
   }
 }
 
@@ -171,15 +172,45 @@ function buildLocationOnlyReply(match, language) {
 
   switch (resolvedLanguage) {
     case "en":
-      return `You can find ${subject} in ${place}.`;
+      return `You can find ${subject} at ${place}.`;
     case "zh":
       return `您可以在${place}找到${subject}。`;
     case "ar":
       return `يمكنك العثور على ${subject} في ${place}.`;
     case "fr":
     default:
-      return `Vous trouverez ${subject} dans ${place}.`;
+      return `Vous trouverez ${subject} à ${place}.`;
   }
+}
+
+function findLocationByAiResolution(allLocations, aiResolution) {
+  if (!aiResolution || aiResolution.type !== "location" || !aiResolution.locationName) {
+    return null;
+  }
+
+  const normalizedTarget = String(aiResolution.locationName || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  return allLocations.find((location) => {
+    const candidates = [
+      location.name,
+      location.externalRobotId,
+      location.slug,
+      ...(location.aliases || [])
+    ]
+      .map((candidate) =>
+        String(candidate || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim()
+      )
+      .filter(Boolean);
+    return candidates.includes(normalizedTarget);
+  });
 }
 
 function buildStoreInformationReply(entries, language) {
@@ -315,36 +346,86 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
   const session = getSession(sessionId);
   const history = session.session.history;
-  const matchedLocation = await findLocationFromMessage(trimmedMessage);
-  const matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
+  let matchedLocation = await findLocationFromMessage(trimmedMessage);
+  let matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
-  const navigableSet = new Set((Array.isArray(navigableLocationIds) ? navigableLocationIds : []).map((item) => String(item)));
+  const navigableSet = new Set(
+    (Array.isArray(navigableLocationIds) ? navigableLocationIds : [])
+      .map((item) => normalize(String(item)))
+      .filter(Boolean)
+  );
   const allLocations = await listKnownLocations();
   const dbNavigableLocations = allLocations.filter(
     (item) => item.robotCanNavigate && item.isCurrentlyAvailable
   );
   const navigableLocations = navigableSet.size
-    ? dbNavigableLocations.filter((item) => navigableSet.has(item.id))
+    ? dbNavigableLocations.filter((item) => {
+        const candidates = [
+          item.id,
+          item.slug,
+          item.externalRobotId,
+          item.name,
+          ...(item.aliases || [])
+        ]
+          .map((candidate) => normalize(String(candidate || "")))
+          .filter(Boolean);
+        return candidates.some((candidate) => navigableSet.has(candidate));
+      })
     : dbNavigableLocations;
 
   pushHistory(session.sessionId, "user", trimmedMessage);
+
+  if (!matchedLocation && !matchedStoreInformation.length) {
+    try {
+      const aiResolution = await resolveCatalogMatch({
+        message: trimmedMessage,
+        language: resolvedLanguage,
+        locations: allLocations,
+        storeInformation: await listStoreInformation()
+      });
+
+      const aiResolvedLocation = findLocationByAiResolution(allLocations, aiResolution);
+      if (aiResolvedLocation) {
+        matchedLocation = {
+          type: "location",
+          itemName: null,
+          location: aiResolvedLocation
+        };
+      }
+    } catch {
+      // Fallback to direct matching only.
+    }
+  }
 
   let reply;
   let action = null;
 
   if (matchedLocation) {
+    const locationNavigationCandidates = [
+      matchedLocation.location.id,
+      matchedLocation.location.slug,
+      matchedLocation.location.externalRobotId,
+      matchedLocation.location.name,
+      ...(matchedLocation.location.aliases || [])
+    ]
+      .map((candidate) => normalize(String(candidate || "")))
+      .filter(Boolean);
+
     const canNavigate =
       matchedLocation.location.robotCanNavigate &&
       matchedLocation.location.isCurrentlyAvailable &&
-      (!navigableSet.size || navigableSet.has(matchedLocation.location.id));
+      (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
 
     if (canNavigate) {
       reply = buildLocationReply(matchedLocation, resolvedLanguage);
       action = {
         type: "navigate",
         destination: matchedLocation.location.zone || matchedLocation.location.name,
-        locationId: matchedLocation.location.id
+        locationId:
+          matchedLocation.location.externalRobotId ||
+          matchedLocation.location.slug ||
+          matchedLocation.location.id
       };
     } else {
       reply = buildLocationOnlyReply(matchedLocation, resolvedLanguage);

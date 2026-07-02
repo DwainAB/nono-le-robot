@@ -77,3 +77,73 @@ export async function createAssistantReply({ message, sessionId, language, histo
   const data = await response.json();
   return data.output_text?.trim() || null;
 }
+
+export async function resolveCatalogMatch({
+  message,
+  language,
+  locations,
+  storeInformation
+}) {
+  if (!config.openAiApiKey) {
+    return null;
+  }
+
+  const catalogText = [
+    "Lieux connus :",
+    ...(locations || []).map((location) => {
+      const contents = (location.items || []).map((item) => item.name).filter(Boolean).join(", ");
+      return `- ${location.name} | info: ${location.details || location.zone || "non renseigne"} | contenus: ${contents || "aucun"} | navigation: ${location.robotCanNavigate ? "possible" : "impossible"} | disponible: ${location.isCurrentlyAvailable ? "oui" : "non"}`;
+    }),
+    "Informations generales :",
+    ...(storeInformation || []).map((entry) => `- ${entry.title}: ${entry.value}`)
+  ].join("\n");
+
+  const systemPrompt = [
+    "Tu aides un backend a comprendre la demande d'un client dans n'importe quelle langue.",
+    "Les donnees du catalogue peuvent etre ecrites dans une seule autre langue.",
+    "Tu dois faire la correspondance semantique entre la demande du client et le bon lieu ou la bonne information.",
+    "Ne traduis pas mot a mot seulement, comprends le sens.",
+    "Si un client demande un produit ou un service, retrouve le lieu le plus pertinent.",
+    "Reponds uniquement en JSON valide sans markdown.",
+    "Format exact attendu:",
+    "{\"type\":\"location|store_info|none\",\"locationName\":\"... ou null\",\"storeInfoTitle\":\"... ou null\",\"reason\":\"courte explication\"}"
+  ].join(" ");
+
+  const userPrompt = [
+    `Langue client: ${language || "fr"}`,
+    `Demande client: ${message}`,
+    catalogText
+  ].join("\n\n");
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.openAiApiKey}`
+    },
+    body: JSON.stringify({
+      model: config.openAiModel,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  const text = data.output_text?.trim();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
