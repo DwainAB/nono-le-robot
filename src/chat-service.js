@@ -1,6 +1,12 @@
 import crypto from "node:crypto";
 import { createAssistantReply } from "./openai-chat.js";
-import { findLocationFromMessage, listKnownLocations } from "./store-map.js";
+import {
+  buildLocationContextText,
+  buildStoreInformationContextText,
+  findLocationFromMessage,
+  findStoreInformationFromMessage,
+  listKnownLocations
+} from "./store-map.js";
 
 const sessions = new Map();
 function getSession(sessionId) {
@@ -117,41 +123,99 @@ function buildGreetingWithFirstName(firstName, language) {
   }
 }
 
-function buildLocationReply(location, language) {
+function buildPlaceDescription(location, language) {
   const resolvedLanguage = normalizeLanguage(language);
-  const locationName = localizeLocationName(location, resolvedLanguage);
-  const locationZone = localizeLocationZone(location, resolvedLanguage);
-  const locationDetails = localizeLocationDetails(location, resolvedLanguage);
+  const zone = location.zone;
+  const details = location.details;
+  const floorLabel = location.floorLabel;
+
+  if (resolvedLanguage === "en") {
+    return [zone, details, floorLabel].filter(Boolean).join(", ");
+  }
+
+  if (resolvedLanguage === "zh") {
+    return [zone, details, floorLabel].filter(Boolean).join("，");
+  }
+
+  if (resolvedLanguage === "ar") {
+    return [zone, details, floorLabel].filter(Boolean).join("، ");
+  }
+
+  return [zone, details, floorLabel].filter(Boolean).join(", ");
+}
+
+function buildLocationReply(match, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const location = match.location;
+  const subject = match.itemName || localizeLocationName(location, resolvedLanguage);
+  const place = buildPlaceDescription(location, resolvedLanguage);
 
   switch (resolvedLanguage) {
     case "en":
-      return `The ${locationName} are in ${locationZone}, ${locationDetails}. I can take you there if you want.`;
+      return `You can find ${subject} in ${place}. I can take you there if you want.`;
     case "zh":
-      return `${locationName}在${locationZone}，${locationDetails}。如果您愿意，我可以带您过去。`;
+      return `您可以在${place}找到${subject}。如果您愿意，我可以带您过去。`;
     case "ar":
-      return `${locationName} موجودة في ${locationZone}، ${locationDetails}. يمكنني أن آخذك إليها إذا أردت.`;
+      return `يمكنك العثور على ${subject} في ${place}. يمكنني أن آخذك إليها إذا أردت.`;
     case "fr":
     default:
-      return `Les ${locationName} sont au ${locationZone}, ${locationDetails}. Je peux vous y guider si vous voulez.`;
+      return `Vous trouverez ${subject} dans ${place}. Je peux vous y guider si vous voulez.`;
   }
 }
 
-function buildLocationOnlyReply(location, language) {
+function buildLocationOnlyReply(match, language) {
   const resolvedLanguage = normalizeLanguage(language);
-  const locationName = localizeLocationName(location, resolvedLanguage);
-  const locationZone = localizeLocationZone(location, resolvedLanguage);
-  const locationDetails = localizeLocationDetails(location, resolvedLanguage);
+  const location = match.location;
+  const subject = match.itemName || localizeLocationName(location, resolvedLanguage);
+  const place = buildPlaceDescription(location, resolvedLanguage);
 
   switch (resolvedLanguage) {
     case "en":
-      return `The ${locationName} are in ${locationZone}, ${locationDetails}.`;
+      return `You can find ${subject} in ${place}.`;
     case "zh":
-      return `${locationName}在${locationZone}，${locationDetails}。`;
+      return `您可以在${place}找到${subject}。`;
     case "ar":
-      return `${locationName} موجودة في ${locationZone}، ${locationDetails}.`;
+      return `يمكنك العثور على ${subject} في ${place}.`;
     case "fr":
     default:
-      return `Les ${locationName} sont au ${locationZone}, ${locationDetails}.`;
+      return `Vous trouverez ${subject} dans ${place}.`;
+  }
+}
+
+function buildStoreInformationReply(entries, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const items = Array.isArray(entries) ? entries.filter(Boolean) : [];
+  if (!items.length) {
+    return null;
+  }
+
+  const first = items[0];
+
+  if (first.kind === "event" && items.length > 1) {
+    const values = items.map((entry) => `${entry.title}: ${entry.value}`).join(" ; ");
+    switch (resolvedLanguage) {
+      case "en":
+        return `Current events: ${values}.`;
+      case "zh":
+        return `当前活动：${values}。`;
+      case "ar":
+        return `الفعاليات الحالية: ${values}.`;
+      case "fr":
+      default:
+        return `Voici les evenements en cours : ${values}.`;
+    }
+  }
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `${first.title}: ${first.value}.`;
+    case "zh":
+      return `${first.title}：${first.value}。`;
+    case "ar":
+      return `${first.title}: ${first.value}.`;
+    case "fr":
+    default:
+      return `${first.title} : ${first.value}.`;
   }
 }
 
@@ -243,20 +307,6 @@ function buildFallbackReply(message, language) {
   }
 }
 
-function buildLocationContextText(language) {
-  const resolvedLanguage = normalizeLanguage(language);
-  const locations = listKnownLocations();
-
-  return locations
-    .map((item) => {
-      const name = item.labels?.[resolvedLanguage]?.name || item.name;
-      const zone = item.labels?.[resolvedLanguage]?.zone || item.zone;
-      const details = item.labels?.[resolvedLanguage]?.details || item.details;
-      return `${name}: ${zone}, ${details}`;
-    })
-    .join(" ; ");
-}
-
 export async function handleChat({ message, sessionId, language = "fr", navigableLocationIds = [] }) {
   const trimmedMessage = String(message || "").trim();
   if (!trimmedMessage) {
@@ -265,12 +315,18 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
   const session = getSession(sessionId);
   const history = session.session.history;
-  const matchedLocation = findLocationFromMessage(trimmedMessage);
+  const matchedLocation = await findLocationFromMessage(trimmedMessage);
+  const matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
   const navigableSet = new Set((Array.isArray(navigableLocationIds) ? navigableLocationIds : []).map((item) => String(item)));
-  const allLocations = listKnownLocations();
-  const navigableLocations = allLocations.filter((item) => navigableSet.has(item.id));
+  const allLocations = await listKnownLocations();
+  const dbNavigableLocations = allLocations.filter(
+    (item) => item.robotCanNavigate && item.isCurrentlyAvailable
+  );
+  const navigableLocations = navigableSet.size
+    ? dbNavigableLocations.filter((item) => navigableSet.has(item.id))
+    : dbNavigableLocations;
 
   pushHistory(session.sessionId, "user", trimmedMessage);
 
@@ -278,23 +334,31 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   let action = null;
 
   if (matchedLocation) {
-    if (navigableSet.has(matchedLocation.id)) {
+    const canNavigate =
+      matchedLocation.location.robotCanNavigate &&
+      matchedLocation.location.isCurrentlyAvailable &&
+      (!navigableSet.size || navigableSet.has(matchedLocation.location.id));
+
+    if (canNavigate) {
       reply = buildLocationReply(matchedLocation, resolvedLanguage);
       action = {
         type: "navigate",
-        destination: matchedLocation.zone,
-        locationId: matchedLocation.id
+        destination: matchedLocation.location.zone || matchedLocation.location.name,
+        locationId: matchedLocation.location.id
       };
     } else {
       reply = buildLocationOnlyReply(matchedLocation, resolvedLanguage);
     }
+  } else if (matchedStoreInformation.length) {
+    reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
   } else if (extractedFirstName) {
     updateFirstName(session.sessionId, extractedFirstName || trimmedMessage);
     reply = buildGenericHelpReply(resolvedLanguage);
   } else if (isLocationIntent(trimmedMessage, resolvedLanguage)) {
     reply = buildUnknownLocationReply(resolvedLanguage);
   } else {
-    const locationNames = buildLocationContextText(resolvedLanguage);
+    const locationNames = await buildLocationContextText(resolvedLanguage);
+    const storeInformationContext = await buildStoreInformationContextText(resolvedLanguage);
     const navigableContext = buildNavigableContext(resolvedLanguage, navigableLocations);
 
     reply =
@@ -303,7 +367,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
         sessionId: session.sessionId,
         language: resolvedLanguage,
         history,
-        locationContext: locationNames,
+        locationContext: [locationNames, storeInformationContext].filter(Boolean).join(" ; "),
         navigableContext
       })) || buildFallbackReply(trimmedMessage, resolvedLanguage);
   }
