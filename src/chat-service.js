@@ -9,6 +9,16 @@ import {
   listStoreInformation
 } from "./store-map.js";
 
+function normalize(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const sessions = new Map();
 function getSession(sessionId) {
   const resolvedSessionId = sessionId || crypto.randomUUID();
