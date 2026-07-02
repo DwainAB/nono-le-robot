@@ -55,16 +55,31 @@ function scoreCandidate(normalizedMessage, candidate) {
     return 0;
   }
 
+  const singularMessage = normalizedMessage.endsWith("s") ? normalizedMessage.slice(0, -1) : normalizedMessage;
+  const singularCandidate = normalizedCandidate.endsWith("s") ? normalizedCandidate.slice(0, -1) : normalizedCandidate;
+
   if (normalizedMessage === normalizedCandidate) {
     return 1000 + normalizedCandidate.length;
+  }
+
+  if (singularMessage && singularCandidate && singularMessage === singularCandidate) {
+    return 950 + singularCandidate.length;
   }
 
   if (normalizedMessage.includes(normalizedCandidate)) {
     return 700 + normalizedCandidate.length;
   }
 
+  if (normalizedMessage.includes(singularCandidate) || singularMessage.includes(normalizedCandidate)) {
+    return 680 + singularCandidate.length;
+  }
+
   if (normalizedCandidate.includes(normalizedMessage)) {
     return 500 + normalizedMessage.length;
+  }
+
+  if (singularCandidate.includes(singularMessage) || singularMessage.includes(singularCandidate)) {
+    return 480 + singularMessage.length;
   }
 
   const messageWords = normalizedMessage.split(" ");
@@ -212,14 +227,14 @@ function chooseBestItemLocation(locations, itemName) {
   const ordered = locations
     .slice()
     .sort((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
       if (left.location.robotCanNavigate !== right.location.robotCanNavigate) {
         return Number(right.location.robotCanNavigate) - Number(left.location.robotCanNavigate);
       }
       if (left.location.isCurrentlyAvailable !== right.location.isCurrentlyAvailable) {
         return Number(right.location.isCurrentlyAvailable) - Number(left.location.isCurrentlyAvailable);
+      }
+      if (left.priority !== right.priority) {
+        return left.priority - right.priority;
       }
       return left.location.name.localeCompare(right.location.name, "fr");
     });
