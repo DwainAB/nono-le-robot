@@ -151,21 +151,21 @@ const server = createServer(async (request, response) => {
 });
 
 async function startServer() {
-  try {
-    if (isDatabaseConfigured()) {
-      await bootstrapDatabase();
-      await testDatabaseConnection();
-      console.log("Connexion MySQL OK");
-    } else {
-      console.warn("Base MySQL non configuree");
-    }
+  server.listen(config.port, config.host, () => {
+    console.log(`Backend en ecoute sur http://${config.host}:${config.port}`);
+  });
 
-    server.listen(config.port, config.host, () => {
-      console.log(`Backend en ecoute sur http://${config.host}:${config.port}`);
-    });
+  if (!isDatabaseConfigured()) {
+    console.warn("Base MySQL non configuree");
+    return;
+  }
+
+  try {
+    await bootstrapDatabase();
+    await testDatabaseConnection();
+    console.log("Connexion MySQL OK");
   } catch (error) {
-    console.error("Impossible de demarrer le backend:", error);
-    process.exit(1);
+    console.error("Initialisation MySQL echouee:", error);
   }
 }
 

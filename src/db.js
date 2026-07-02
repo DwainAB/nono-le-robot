@@ -42,6 +42,7 @@ function buildConnectionOptions() {
       password: decodeURIComponent(url.password),
       database: url.pathname.replace(/^\//, ""),
       ssl,
+      connectTimeout: 10_000,
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0
@@ -59,6 +60,7 @@ function buildConnectionOptions() {
     password: config.dbPassword || "",
     database: config.dbName,
     ssl,
+    connectTimeout: 10_000,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
