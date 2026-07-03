@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { config } from "./config.js";
 import { handleChat } from "./chat-service.js";
+import { handleTranscription } from "./transcribe-service.js";
 import { bootstrapDatabase, isDatabaseConfigured, testDatabaseConnection } from "./db.js";
 import {
   listKnownLocations,
@@ -78,6 +79,19 @@ const server = createServer(async (request, response) => {
     try {
       const body = await collectRequestBody(request);
       const result = await handleChat(body);
+      sendJson(response, 200, result);
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/transcribe") {
+    try {
+      const body = await collectRequestBody(request);
+      const result = await handleTranscription(body);
       sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 400, {

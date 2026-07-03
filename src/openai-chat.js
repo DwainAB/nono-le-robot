@@ -78,6 +78,55 @@ export async function createAssistantReply({ message, sessionId, language, histo
   return data.output_text?.trim() || null;
 }
 
+export async function createAudioTranscription({
+  audioBase64,
+  mimeType,
+  fileName,
+  language
+}) {
+  if (!config.openAiApiKey) {
+    throw new Error("OPENAI_API_KEY manquante");
+  }
+
+  if (!audioBase64) {
+    throw new Error("Audio manquant");
+  }
+
+  const audioBuffer = Buffer.from(audioBase64, "base64");
+  if (!audioBuffer.length) {
+    throw new Error("Audio vide");
+  }
+
+  const formData = new FormData();
+  const resolvedMimeType = mimeType || "audio/mp4";
+  const resolvedFileName = fileName || "speech.m4a";
+  formData.append("model", config.openAiTranscriptionModel);
+  if (language) {
+    formData.append("language", language);
+  }
+  formData.append(
+    "file",
+    new Blob([audioBuffer], { type: resolvedMimeType }),
+    resolvedFileName
+  );
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.openAiApiKey}`
+    },
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI transcription error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.text?.trim() || "";
+}
+
 export async function resolveCatalogMatch({
   message,
   language,
