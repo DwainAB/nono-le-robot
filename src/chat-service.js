@@ -81,6 +81,8 @@ function extractFirstName(message) {
   const directPatterns = [
     /(?:je m'appelle|moi c'est|mon prenom est|mon prénom est)\s+([a-zA-ZÀ-ÿ' -]+)/i,
     /(?:i am|my name is|i'm)\s+([a-zA-ZÀ-ÿ' -]+)/i,
+    /(?:me llamo|mi nombre es|soy)\s+([a-zA-ZÀ-ÿ' -]+)/i,
+    /(?:меня зовут|я)\s+([а-яёА-ЯЁ' -]+)/i,
     /(?:我叫|我的名字是)\s*([^\s,.!?，。！？]{1,20})/i,
     /(?:اسمي|انا|أنا)\s+([^\s,.!?،]{1,20})/i
   ];
@@ -103,6 +105,8 @@ function normalizeLanguage(language) {
   const value = String(language || "fr").toLowerCase();
   if (value.startsWith("fr")) return "fr";
   if (value.startsWith("en")) return "en";
+  if (value.startsWith("es")) return "es";
+  if (value.startsWith("ru")) return "ru";
   if (value.startsWith("zh")) return "zh";
   if (value.startsWith("ar")) return "ar";
   return "fr";
@@ -120,10 +124,21 @@ function localizeLocationDetails(location, language) {
   return location.labels?.[language]?.details || location.details;
 }
 
+function localizeItemName(item, language) {
+  if (!item) {
+    return null;
+  }
+  return item.labels?.[language]?.name || item.name;
+}
+
 function buildGreetingWithFirstName(firstName, language) {
   switch (normalizeLanguage(language)) {
     case "en":
       return "Hello, how can I help you?";
+    case "es":
+      return "Hola, ¿en qué puedo ayudarle?";
+    case "ru":
+      return "Здравствуйте, чем я могу вам помочь?";
     case "zh":
       return "您好，我可以怎么帮助您？";
     case "ar":
@@ -136,12 +151,24 @@ function buildGreetingWithFirstName(firstName, language) {
 
 function buildPlaceDescription(location, language) {
   const resolvedLanguage = normalizeLanguage(language);
-  const primaryInfo = location.details || location.description || location.zone || location.floorLabel || "";
+  const primaryInfo =
+    location.labels?.[resolvedLanguage]?.details ||
+    location.labels?.[resolvedLanguage]?.description ||
+    location.labels?.[resolvedLanguage]?.zone ||
+    location.details ||
+    location.description ||
+    location.zone ||
+    location.floorLabel ||
+    "";
 
   if (!primaryInfo) {
     switch (resolvedLanguage) {
       case "en":
         return "this place";
+      case "es":
+        return "este lugar";
+      case "ru":
+        return "это место";
       case "zh":
         return "这个位置";
       case "ar":
@@ -158,12 +185,19 @@ function buildPlaceDescription(location, language) {
 function buildLocationReply(match, language) {
   const resolvedLanguage = normalizeLanguage(language);
   const location = match.location;
-  const subject = match.itemName || localizeLocationName(location, resolvedLanguage);
+  const subject =
+    localizeItemName(match.item, resolvedLanguage) ||
+    match.itemName ||
+    localizeLocationName(location, resolvedLanguage);
   const place = buildPlaceDescription(location, resolvedLanguage);
 
   switch (resolvedLanguage) {
     case "en":
       return `You can find ${subject} at ${place}. I can take you there if you want.`;
+    case "es":
+      return `Puede encontrar ${subject} en ${place}. Puedo acompañarle hasta allí si lo desea.`;
+    case "ru":
+      return `${subject} находится здесь: ${place}. Я могу вас туда проводить, если хотите.`;
     case "zh":
       return `您可以在${place}找到${subject}。如果您愿意，我可以带您过去。`;
     case "ar":
@@ -177,12 +211,19 @@ function buildLocationReply(match, language) {
 function buildLocationOnlyReply(match, language) {
   const resolvedLanguage = normalizeLanguage(language);
   const location = match.location;
-  const subject = match.itemName || localizeLocationName(location, resolvedLanguage);
+  const subject =
+    localizeItemName(match.item, resolvedLanguage) ||
+    match.itemName ||
+    localizeLocationName(location, resolvedLanguage);
   const place = buildPlaceDescription(location, resolvedLanguage);
 
   switch (resolvedLanguage) {
     case "en":
       return `You can find ${subject} at ${place}.`;
+    case "es":
+      return `Puede encontrar ${subject} en ${place}.`;
+    case "ru":
+      return `${subject} находится здесь: ${place}.`;
     case "zh":
       return `您可以在${place}找到${subject}。`;
     case "ar":
@@ -209,6 +250,7 @@ function findLocationByAiResolution(allLocations, aiResolution) {
       location.name,
       location.externalRobotId,
       location.slug,
+      ...Object.values(location.labels || {}).map((label) => label?.name),
       ...(location.aliases || [])
     ]
       .map((candidate) =>
@@ -233,10 +275,20 @@ function buildStoreInformationReply(entries, language) {
   const first = items[0];
 
   if (first.kind === "event" && items.length > 1) {
-    const values = items.map((entry) => `${entry.title}: ${entry.value}`).join(" ; ");
+    const values = items
+      .map((entry) => {
+        const localizedTitle = entry.labels?.[resolvedLanguage]?.title || entry.title;
+        const localizedValue = entry.labels?.[resolvedLanguage]?.value || entry.value;
+        return `${localizedTitle}: ${localizedValue}`;
+      })
+      .join(" ; ");
     switch (resolvedLanguage) {
       case "en":
         return `Current events: ${values}.`;
+      case "es":
+        return `Eventos actuales: ${values}.`;
+      case "ru":
+        return `Текущие события: ${values}.`;
       case "zh":
         return `当前活动：${values}。`;
       case "ar":
@@ -249,11 +301,15 @@ function buildStoreInformationReply(entries, language) {
 
   switch (resolvedLanguage) {
     case "en":
-      return `${first.title}: ${first.value}.`;
+      return `${first.labels?.en?.title || first.title}: ${first.labels?.en?.value || first.value}.`;
+    case "es":
+      return `${first.labels?.es?.title || first.title}: ${first.labels?.es?.value || first.value}.`;
+    case "ru":
+      return `${first.labels?.ru?.title || first.title}: ${first.labels?.ru?.value || first.value}.`;
     case "zh":
-      return `${first.title}：${first.value}。`;
+      return `${first.labels?.zh?.title || first.title}：${first.labels?.zh?.value || first.value}。`;
     case "ar":
-      return `${first.title}: ${first.value}.`;
+      return `${first.labels?.ar?.title || first.title}: ${first.labels?.ar?.value || first.value}.`;
     case "fr":
     default:
       return `${first.title} : ${first.value}.`;
@@ -264,6 +320,10 @@ function buildUnknownLocationReply(language) {
   switch (normalizeLanguage(language)) {
     case "en":
       return "I do not know where it is at the moment.";
+    case "es":
+      return "No sé dónde está en este momento.";
+    case "ru":
+      return "Сейчас я не знаю, где это находится.";
     case "zh":
       return "我暂时不知道它在哪里。";
     case "ar":
@@ -278,6 +338,10 @@ function buildGenericHelpReply(language) {
   switch (normalizeLanguage(language)) {
     case "en":
       return "Hello, how can I help you?";
+    case "es":
+      return "Hola, ¿en qué puedo ayudarle?";
+    case "ru":
+      return "Здравствуйте, чем я могу вам помочь?";
     case "zh":
       return "您好，我可以怎么帮助您？";
     case "ar":
@@ -295,6 +359,8 @@ function isLocationIntent(message, language) {
   const patterns = {
     fr: [/ou sont?/i, /je cherche/i, /ou se trouvent?/i, /je voudrais/i],
     en: [/where is/i, /where are/i, /i am looking for/i, /i want/i],
+    es: [/donde esta/i, /dónde está/i, /donde estan/i, /dónde están/i, /busco/i, /quiero/i],
+    ru: [/где/i, /ищу/i, /мне нужен/i, /мне нужна/i, /хочу/i],
     zh: [/在哪/i, /我想找/i, /有没有/i],
     ar: [/اين/i, /أين/i, /ابحث عن/i, /أريد/i]
   };
@@ -321,10 +387,14 @@ function buildNavigableContext(language, navigableLocations) {
 function buildFallbackReply(message, language) {
   const resolvedLanguage = normalizeLanguage(language);
 
-  if (/bonjour|salut|hello|hi|你好|您好|مرحبا|السلام/i.test(message)) {
+  if (/bonjour|salut|hello|hi|hola|buenas|привет|здравствуйте|你好|您好|مرحبا|السلام/i.test(message)) {
     switch (resolvedLanguage) {
       case "en":
         return "Hello, how can I help you?";
+      case "es":
+        return "Hola, ¿en qué puedo ayudarle?";
+      case "ru":
+        return "Здравствуйте, чем я могу вам помочь?";
       case "zh":
         return "您好，我可以帮您什么？";
       case "ar":
@@ -338,6 +408,10 @@ function buildFallbackReply(message, language) {
   switch (resolvedLanguage) {
     case "en":
       return "I can help you find a product, a section or a service in the store. Just tell me what you are looking for.";
+    case "es":
+      return "Puedo ayudarle a encontrar un producto, una sección o un servicio de la tienda. Solo dígame qué está buscando.";
+    case "ru":
+      return "Я могу помочь вам найти товар, отдел или услугу в магазине. Просто скажите, что вы ищете.";
     case "zh":
       return "我可以帮您找到商品、区域或门店服务。请直接告诉我您在找什么。";
     case "ar":

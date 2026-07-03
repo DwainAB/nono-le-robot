@@ -91,11 +91,25 @@ export async function resolveCatalogMatch({
   const catalogText = [
     "Lieux connus :",
     ...(locations || []).map((location) => {
-      const contents = (location.items || []).map((item) => item.name).filter(Boolean).join(", ");
-      return `- ${location.name} | info: ${location.details || location.zone || "non renseigne"} | contenus: ${contents || "aucun"} | navigation: ${location.robotCanNavigate ? "possible" : "impossible"} | disponible: ${location.isCurrentlyAvailable ? "oui" : "non"}`;
+      const translatedLocationNames = Object.values(location.labels || {})
+        .map((label) => label?.name)
+        .filter(Boolean)
+        .join(", ");
+      const contents = (location.items || [])
+        .map((item) => [item.name, ...Object.values(item.labels || {}).map((label) => label?.name)])
+        .flat()
+        .filter(Boolean)
+        .join(", ");
+      return `- ${location.name}${translatedLocationNames ? ` | traductions: ${translatedLocationNames}` : ""} | info: ${location.details || location.zone || "non renseigne"} | contenus: ${contents || "aucun"} | navigation: ${location.robotCanNavigate ? "possible" : "impossible"} | disponible: ${location.isCurrentlyAvailable ? "oui" : "non"}`;
     }),
     "Informations generales :",
-    ...(storeInformation || []).map((entry) => `- ${entry.title}: ${entry.value}`)
+    ...(storeInformation || []).map((entry) => {
+      const translatedTitles = Object.values(entry.labels || {})
+        .map((label) => label?.title)
+        .filter(Boolean)
+        .join(", ");
+      return `- ${entry.title}${translatedTitles ? ` | traductions: ${translatedTitles}` : ""}: ${entry.value}`;
+    })
   ].join("\n");
 
   const systemPrompt = [

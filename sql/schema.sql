@@ -30,6 +30,22 @@ CREATE TABLE IF NOT EXISTS location_aliases (
     ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS location_translations (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  location_id BIGINT UNSIGNED NOT NULL,
+  language_code VARCHAR(10) NOT NULL,
+  name VARCHAR(191) NULL,
+  zone VARCHAR(191) NULL,
+  details VARCHAR(255) NULL,
+  description TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_location_translation (location_id, language_code),
+  CONSTRAINT fk_location_translations_location
+    FOREIGN KEY (location_id) REFERENCES locations(id)
+    ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS items (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   slug VARCHAR(191) NOT NULL,
@@ -50,6 +66,21 @@ CREATE TABLE IF NOT EXISTS item_aliases (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_item_alias (item_id, alias),
   CONSTRAINT fk_item_aliases_item
+    FOREIGN KEY (item_id) REFERENCES items(id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS item_translations (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  item_id BIGINT UNSIGNED NOT NULL,
+  language_code VARCHAR(10) NOT NULL,
+  name VARCHAR(191) NULL,
+  category VARCHAR(191) NULL,
+  description TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_item_translation (item_id, language_code),
+  CONSTRAINT fk_item_translations_item
     FOREIGN KEY (item_id) REFERENCES items(id)
     ON DELETE CASCADE
 );
@@ -86,4 +117,18 @@ CREATE TABLE IF NOT EXISTS store_information (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_store_information_slug (slug),
   KEY idx_store_information_kind (kind, is_active)
+);
+
+CREATE TABLE IF NOT EXISTS store_information_translations (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  store_information_id BIGINT UNSIGNED NOT NULL,
+  language_code VARCHAR(10) NOT NULL,
+  title VARCHAR(191) NULL,
+  value_text TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_store_information_translation (store_information_id, language_code),
+  CONSTRAINT fk_store_information_translations_store_information
+    FOREIGN KEY (store_information_id) REFERENCES store_information(id)
+    ON DELETE CASCADE
 );
