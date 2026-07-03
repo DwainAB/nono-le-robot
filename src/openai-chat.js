@@ -170,14 +170,67 @@ export async function resolveCatalogMatch({
     labels: entry.labels || {}
   }));
 
+  const locationCandidates = locationCatalog.map((location) => ({
+    id: location.id,
+    names: [
+      location.name,
+      location.slug,
+      location.externalRobotId,
+      ...location.aliases,
+      ...Object.values(location.labels || {}).flatMap((label) => [
+        label?.name,
+        label?.zone,
+        label?.details,
+        label?.description
+      ])
+    ].filter(Boolean),
+    searchableContext: [
+      location.zone,
+      location.details,
+      location.floorLabel,
+      location.description,
+      ...(location.items || []).flatMap((item) => [
+        item.name,
+        item.slug,
+        item.category,
+        item.description,
+        ...(item.aliases || []),
+        ...Object.values(item.labels || {}).flatMap((label) => [
+          label?.name,
+          label?.category,
+          label?.description
+        ])
+      ])
+    ].filter(Boolean),
+    navigation: {
+      robotCanNavigate: location.robotCanNavigate,
+      isCurrentlyAvailable: location.isCurrentlyAvailable
+    }
+  }));
+
+  const storeInfoCandidates = storeInfoCatalog.map((entry) => ({
+    id: entry.id,
+    kind: entry.kind,
+    titles: [
+      entry.title,
+      entry.slug,
+      ...Object.values(entry.labels || {}).flatMap((label) => [label?.title, label?.value])
+    ].filter(Boolean),
+    value: entry.value
+  }));
+
   const systemPrompt = [
     "Tu aides un backend a comprendre une demande client dans n'importe quelle langue actuelle ou future.",
     "Le catalogue est dynamique et vient d'un backoffice.",
     "Tu dois faire une resolution semantique robuste entre la demande et le catalogue, meme si la demande et les donnees ne sont pas dans la meme langue.",
     "Tu dois raisonner sur le sens, pas sur des mots exacts.",
+    "Tu dois choisir uniquement parmi les candidats fournis.",
     "Tu ne dois jamais inventer un identifiant, un lieu ou une information qui n'existe pas dans le catalogue fourni.",
     "Si un produit, service, rayon ou besoin correspond a un lieu du catalogue, retourne l'identifiant canonique de ce lieu.",
     "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information.",
+    "Les equivalences de sens, les abreviations, les formulations polies, les fautes, les variantes de langues et les traductions implicites doivent etre comprises.",
+    "Exemples de meme sens: toilettes, wc, bathroom, restroom, bano, aseos.",
+    "Si la demande est une question de localisation ou de recherche, ne retourne jamais type general.",
     "Si la demande est generale ou conversationnelle et ne vise pas clairement un lieu ni une information catalogue, retourne type general.",
     "Si la demande semble viser un lieu, un produit, un service ou une information du magasin mais qu'aucune correspondance fiable n'existe, retourne type none.",
     "Reponds uniquement en JSON valide sans markdown.",
@@ -190,8 +243,8 @@ export async function resolveCatalogMatch({
       customerLanguage: language || "fr",
       customerMessage: message,
       catalog: {
-        locations: locationCatalog,
-        storeInformation: storeInfoCatalog
+        locations: locationCandidates,
+        storeInformation: storeInfoCandidates
       }
     },
     null,
