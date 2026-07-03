@@ -242,8 +242,8 @@ async function rankCatalogBySemanticSimilarity({ message, locations, storeInform
   const queryEmbedding = await createEmbedding(message);
   if (!queryEmbedding) {
     return {
-      rankedLocations: locations || [],
-      rankedStoreInformation: storeInformation || []
+      rankedLocations: (locations || []).map((location) => ({ location, score: -1 })),
+      rankedStoreInformation: (storeInformation || []).map((entry) => ({ entry, score: -1 }))
     };
   }
 
@@ -268,12 +268,8 @@ async function rankCatalogBySemanticSimilarity({ message, locations, storeInform
   );
 
   return {
-    rankedLocations: rankedLocations
-      .sort((left, right) => right.score - left.score)
-      .map((item) => item.location),
-    rankedStoreInformation: rankedStoreInformation
-      .sort((left, right) => right.score - left.score)
-      .map((item) => item.entry)
+    rankedLocations: rankedLocations.sort((left, right) => right.score - left.score),
+    rankedStoreInformation: rankedStoreInformation.sort((left, right) => right.score - left.score)
   };
 }
 
@@ -296,8 +292,28 @@ export async function resolveCatalogMatch({
     storeInformation
   });
 
-  const prioritizedLocations = rankedLocations.slice(0, 6);
-  const prioritizedStoreInformation = rankedStoreInformation.slice(0, 6);
+  console.log(
+    "[resolveCatalogMatch] semanticCandidates",
+    JSON.stringify({
+      message,
+      language,
+      topLocations: rankedLocations.slice(0, 5).map((item) => ({
+        id: item.location.id,
+        name: item.location.name,
+        externalRobotId: item.location.externalRobotId,
+        score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
+      })),
+      topStoreInformation: rankedStoreInformation.slice(0, 5).map((item) => ({
+        id: item.entry.id,
+        title: item.entry.title,
+        kind: item.entry.kind,
+        score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
+      }))
+    })
+  );
+
+  const prioritizedLocations = rankedLocations.slice(0, 6).map((item) => item.location);
+  const prioritizedStoreInformation = rankedStoreInformation.slice(0, 6).map((item) => item.entry);
 
   const locationCatalog = prioritizedLocations.map((location) => ({
     id: String(location.id),
@@ -473,8 +489,18 @@ export async function resolveCatalogMatch({
   }
 
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    console.log(
+      "[resolveCatalogMatch] modelResolution",
+      JSON.stringify({
+        message,
+        language,
+        resolution: parsed
+      })
+    );
+    return parsed;
   } catch {
+    console.warn("[resolveCatalogMatch] invalidJson", text);
     return null;
   }
 }

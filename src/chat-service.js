@@ -460,6 +460,16 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     throw new Error("Message vide");
   }
 
+  console.log(
+    "[handleChat] request",
+    JSON.stringify({
+      sessionId: sessionId || null,
+      language,
+      message: trimmedMessage,
+      navigableLocationIds
+    })
+  );
+
   const session = getSession(sessionId);
   const history = session.session.history;
   const allLocations = await listKnownLocations();
@@ -504,6 +514,15 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   } catch {
     aiResolution = null;
   }
+
+  console.log(
+    "[handleChat] postResolution",
+    JSON.stringify({
+      message: trimmedMessage,
+      language: resolvedLanguage,
+      aiResolution
+    })
+  );
 
   if (aiResolution?.type === "location") {
     const aiResolvedLocation = findLocationByAiResolution(allLocations, aiResolution);
@@ -584,6 +603,17 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   }
 
   pushHistory(session.sessionId, "assistant", reply);
+
+  console.log(
+    "[handleChat] response",
+    JSON.stringify({
+      sessionId: session.sessionId,
+      language: resolvedLanguage,
+      message: trimmedMessage,
+      reply,
+      action
+    })
+  );
 
   return {
     sessionId: session.sessionId,
