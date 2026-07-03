@@ -1,5 +1,7 @@
 import { config } from "./config.js";
 
+const embeddingCache = new Map();
+
 export async function createAssistantReply({ message, sessionId, language, history, locationContext, navigableContext }) {
   if (!config.openAiApiKey) {
     return null;
@@ -127,6 +129,154 @@ export async function createAudioTranscription({
   return data.text?.trim() || "";
 }
 
+async function createEmbedding(input) {
+  if (!config.openAiApiKey) {
+    return null;
+  }
+
+  const normalizedInput = String(input || "").trim();
+  if (!normalizedInput) {
+    return null;
+  }
+
+  const cached = embeddingCache.get(normalizedInput);
+  if (cached) {
+    return cached;
+  }
+
+  const response = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.openAiApiKey}`
+    },
+    body: JSON.stringify({
+      model: config.openAiEmbeddingModel,
+      input: normalizedInput
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI embedding error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  const embedding = data.data?.[0]?.embedding || null;
+  if (embedding) {
+    embeddingCache.set(normalizedInput, embedding);
+  }
+  return embedding;
+}
+
+function cosineSimilarity(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || !left.length) {
+    return -1;
+  }
+
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index];
+    const rightValue = right[index];
+    dot += leftValue * rightValue;
+    leftNorm += leftValue * leftValue;
+    rightNorm += rightValue * rightValue;
+  }
+
+  if (!leftNorm || !rightNorm) {
+    return -1;
+  }
+
+  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+}
+
+function buildLocationSearchDocument(location) {
+  return [
+    location.name,
+    location.slug,
+    location.externalRobotId,
+    ...(location.aliases || []),
+    location.zone,
+    location.details,
+    location.floorLabel,
+    location.description,
+    ...Object.values(location.labels || {}).flatMap((label) => [
+      label?.name,
+      label?.zone,
+      label?.details,
+      label?.description
+    ]),
+    ...(location.items || []).flatMap((item) => [
+      item.name,
+      item.slug,
+      item.category,
+      item.description,
+      ...(item.aliases || []),
+      ...Object.values(item.labels || {}).flatMap((label) => [
+        label?.name,
+        label?.category,
+        label?.description
+      ])
+    ])
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function buildStoreInfoSearchDocument(entry) {
+  return [
+    entry.title,
+    entry.slug,
+    entry.kind,
+    entry.value,
+    ...Object.values(entry.labels || {}).flatMap((label) => [label?.title, label?.value])
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+async function rankCatalogBySemanticSimilarity({ message, locations, storeInformation }) {
+  const queryEmbedding = await createEmbedding(message);
+  if (!queryEmbedding) {
+    return {
+      rankedLocations: locations || [],
+      rankedStoreInformation: storeInformation || []
+    };
+  }
+
+  const rankedLocations = await Promise.all(
+    (locations || []).map(async (location) => {
+      const embedding = await createEmbedding(buildLocationSearchDocument(location));
+      return {
+        location,
+        score: cosineSimilarity(queryEmbedding, embedding)
+      };
+    })
+  );
+
+  const rankedStoreInformation = await Promise.all(
+    (storeInformation || []).map(async (entry) => {
+      const embedding = await createEmbedding(buildStoreInfoSearchDocument(entry));
+      return {
+        entry,
+        score: cosineSimilarity(queryEmbedding, embedding)
+      };
+    })
+  );
+
+  return {
+    rankedLocations: rankedLocations
+      .sort((left, right) => right.score - left.score)
+      .map((item) => item.location),
+    rankedStoreInformation: rankedStoreInformation
+      .sort((left, right) => right.score - left.score)
+      .map((item) => item.entry)
+  };
+}
+
 export async function resolveCatalogMatch({
   message,
   language,
@@ -137,7 +287,19 @@ export async function resolveCatalogMatch({
     return null;
   }
 
-  const locationCatalog = (locations || []).map((location) => ({
+  const {
+    rankedLocations,
+    rankedStoreInformation
+  } = await rankCatalogBySemanticSimilarity({
+    message,
+    locations,
+    storeInformation
+  });
+
+  const prioritizedLocations = rankedLocations.slice(0, 6);
+  const prioritizedStoreInformation = rankedStoreInformation.slice(0, 6);
+
+  const locationCatalog = prioritizedLocations.map((location) => ({
     id: String(location.id),
     slug: location.slug || null,
     externalRobotId: location.externalRobotId || null,
@@ -161,7 +323,7 @@ export async function resolveCatalogMatch({
     }))
   }));
 
-  const storeInfoCatalog = (storeInformation || []).map((entry) => ({
+  const storeInfoCatalog = prioritizedStoreInformation.map((entry) => ({
     id: String(entry.id),
     slug: entry.slug || null,
     kind: entry.kind || null,
@@ -251,7 +413,7 @@ export async function resolveCatalogMatch({
     2
   );
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -259,10 +421,43 @@ export async function resolveCatalogMatch({
     },
     body: JSON.stringify({
       model: config.openAiModel,
-      input: [
+      messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
-      ]
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "catalog_match",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              type: {
+                type: "string",
+                enum: ["location", "store_info", "general", "none"]
+              },
+              locationId: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
+              storeInfoId: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
+              reason: {
+                type: "string"
+              }
+            },
+            required: ["type", "locationId", "storeInfoId", "reason"]
+          }
+        }
+      }
     })
   });
 
@@ -272,7 +467,7 @@ export async function resolveCatalogMatch({
   }
 
   const data = await response.json();
-  const text = data.output_text?.trim();
+  const text = data.choices?.[0]?.message?.content?.trim();
   if (!text) {
     return null;
   }

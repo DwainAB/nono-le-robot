@@ -24,6 +24,7 @@ export const config = {
   openAiApiKey: process.env.OPENAI_API_KEY || "",
   openAiModel: process.env.OPENAI_MODEL || "gpt-4.1-mini",
   openAiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe",
+  openAiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
   databaseUrl: process.env.DATABASE_URL || "",
   dbHost: process.env.DB_HOST || process.env.MYSQLHOST || "",
   dbPort: process.env.DB_PORT || process.env.MYSQLPORT || "3306",
