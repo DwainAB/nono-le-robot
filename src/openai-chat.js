@@ -137,46 +137,66 @@ export async function resolveCatalogMatch({
     return null;
   }
 
-  const catalogText = [
-    "Lieux connus :",
-    ...(locations || []).map((location) => {
-      const translatedLocationNames = Object.values(location.labels || {})
-        .map((label) => label?.name)
-        .filter(Boolean)
-        .join(", ");
-      const contents = (location.items || [])
-        .map((item) => [item.name, ...Object.values(item.labels || {}).map((label) => label?.name)])
-        .flat()
-        .filter(Boolean)
-        .join(", ");
-      return `- ${location.name}${translatedLocationNames ? ` | traductions: ${translatedLocationNames}` : ""} | info: ${location.details || location.zone || "non renseigne"} | contenus: ${contents || "aucun"} | navigation: ${location.robotCanNavigate ? "possible" : "impossible"} | disponible: ${location.isCurrentlyAvailable ? "oui" : "non"}`;
-    }),
-    "Informations generales :",
-    ...(storeInformation || []).map((entry) => {
-      const translatedTitles = Object.values(entry.labels || {})
-        .map((label) => label?.title)
-        .filter(Boolean)
-        .join(", ");
-      return `- ${entry.title}${translatedTitles ? ` | traductions: ${translatedTitles}` : ""}: ${entry.value}`;
-    })
-  ].join("\n");
+  const locationCatalog = (locations || []).map((location) => ({
+    id: String(location.id),
+    slug: location.slug || null,
+    externalRobotId: location.externalRobotId || null,
+    name: location.name || null,
+    zone: location.zone || null,
+    details: location.details || null,
+    floorLabel: location.floorLabel || null,
+    description: location.description || null,
+    aliases: Array.isArray(location.aliases) ? location.aliases : [],
+    robotCanNavigate: Boolean(location.robotCanNavigate),
+    isCurrentlyAvailable: Boolean(location.isCurrentlyAvailable),
+    labels: location.labels || {},
+    items: (location.items || []).map((item) => ({
+      id: String(item.id),
+      slug: item.slug || null,
+      name: item.name || null,
+      category: item.category || null,
+      description: item.description || null,
+      aliases: Array.isArray(item.aliases) ? item.aliases : [],
+      labels: item.labels || {}
+    }))
+  }));
+
+  const storeInfoCatalog = (storeInformation || []).map((entry) => ({
+    id: String(entry.id),
+    slug: entry.slug || null,
+    kind: entry.kind || null,
+    title: entry.title || null,
+    value: entry.value || null,
+    labels: entry.labels || {}
+  }));
 
   const systemPrompt = [
-    "Tu aides un backend a comprendre la demande d'un client dans n'importe quelle langue.",
-    "Les donnees du catalogue peuvent etre ecrites dans une seule autre langue.",
-    "Tu dois faire la correspondance semantique entre la demande du client et le bon lieu ou la bonne information.",
-    "Ne traduis pas mot a mot seulement, comprends le sens.",
-    "Si un client demande un produit ou un service, retrouve le lieu le plus pertinent.",
+    "Tu aides un backend a comprendre une demande client dans n'importe quelle langue actuelle ou future.",
+    "Le catalogue est dynamique et vient d'un backoffice.",
+    "Tu dois faire une resolution semantique robuste entre la demande et le catalogue, meme si la demande et les donnees ne sont pas dans la meme langue.",
+    "Tu dois raisonner sur le sens, pas sur des mots exacts.",
+    "Tu ne dois jamais inventer un identifiant, un lieu ou une information qui n'existe pas dans le catalogue fourni.",
+    "Si un produit, service, rayon ou besoin correspond a un lieu du catalogue, retourne l'identifiant canonique de ce lieu.",
+    "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information.",
+    "Si la demande est generale ou conversationnelle et ne vise pas clairement un lieu ni une information catalogue, retourne type general.",
+    "Si la demande semble viser un lieu, un produit, un service ou une information du magasin mais qu'aucune correspondance fiable n'existe, retourne type none.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|none\",\"locationName\":\"... ou null\",\"storeInfoTitle\":\"... ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"location|store_info|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"reason\":\"courte explication\"}"
   ].join(" ");
 
-  const userPrompt = [
-    `Langue client: ${language || "fr"}`,
-    `Demande client: ${message}`,
-    catalogText
-  ].join("\n\n");
+  const userPrompt = JSON.stringify(
+    {
+      customerLanguage: language || "fr",
+      customerMessage: message,
+      catalog: {
+        locations: locationCatalog,
+        storeInformation: storeInfoCatalog
+      }
+    },
+    null,
+    2
+  );
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",

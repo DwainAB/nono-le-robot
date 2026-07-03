@@ -235,11 +235,11 @@ function buildLocationOnlyReply(match, language) {
 }
 
 function findLocationByAiResolution(allLocations, aiResolution) {
-  if (!aiResolution || aiResolution.type !== "location" || !aiResolution.locationName) {
+  if (!aiResolution || aiResolution.type !== "location" || !aiResolution.locationId) {
     return null;
   }
 
-  const normalizedTarget = String(aiResolution.locationName || "")
+  const normalizedTarget = String(aiResolution.locationId || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -247,6 +247,7 @@ function findLocationByAiResolution(allLocations, aiResolution) {
 
   return allLocations.find((location) => {
     const candidates = [
+      location.id,
       location.name,
       location.externalRobotId,
       location.slug,
@@ -261,6 +262,37 @@ function findLocationByAiResolution(allLocations, aiResolution) {
           .trim()
       )
       .filter(Boolean);
+    return candidates.includes(normalizedTarget);
+  });
+}
+
+function findStoreInformationByAiResolution(allStoreInformation, aiResolution) {
+  if (!aiResolution || aiResolution.type !== "store_info" || !aiResolution.storeInfoId) {
+    return [];
+  }
+
+  const normalizedTarget = String(aiResolution.storeInfoId || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  return (allStoreInformation || []).filter((entry) => {
+    const candidates = [
+      entry.id,
+      entry.slug,
+      entry.title,
+      ...Object.values(entry.labels || {}).flatMap((label) => [label?.title, label?.value])
+    ]
+      .map((candidate) =>
+        String(candidate || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim()
+      )
+      .filter(Boolean);
+
     return candidates.includes(normalizedTarget);
   });
 }
@@ -430,8 +462,10 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
   const session = getSession(sessionId);
   const history = session.session.history;
-  let matchedLocation = await findLocationFromMessage(trimmedMessage);
-  let matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
+  const allLocations = await listKnownLocations();
+  const allStoreInformation = await listStoreInformation();
+  let matchedLocation = null;
+  let matchedStoreInformation = [];
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
   const navigableSet = new Set(
@@ -439,7 +473,6 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       .map((item) => normalize(String(item)))
       .filter(Boolean)
   );
-  const allLocations = await listKnownLocations();
   const dbNavigableLocations = allLocations.filter(
     (item) => item.robotCanNavigate && item.isCurrentlyAvailable
   );
@@ -460,26 +493,39 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
   pushHistory(session.sessionId, "user", trimmedMessage);
 
-  if (!matchedLocation && !matchedStoreInformation.length) {
-    try {
-      const aiResolution = await resolveCatalogMatch({
-        message: trimmedMessage,
-        language: resolvedLanguage,
-        locations: allLocations,
-        storeInformation: await listStoreInformation()
-      });
+  let aiResolution = null;
+  try {
+    aiResolution = await resolveCatalogMatch({
+      message: trimmedMessage,
+      language: resolvedLanguage,
+      locations: allLocations,
+      storeInformation: allStoreInformation
+    });
+  } catch {
+    aiResolution = null;
+  }
 
-      const aiResolvedLocation = findLocationByAiResolution(allLocations, aiResolution);
-      if (aiResolvedLocation) {
-        matchedLocation = {
-          type: "location",
-          itemName: null,
-          location: aiResolvedLocation
-        };
-      }
-    } catch {
-      // Fallback to direct matching only.
+  if (aiResolution?.type === "location") {
+    const aiResolvedLocation = findLocationByAiResolution(allLocations, aiResolution);
+    if (aiResolvedLocation) {
+      matchedLocation = {
+        type: "location",
+        itemName: null,
+        location: aiResolvedLocation
+      };
+    } else {
+      aiResolution = { ...aiResolution, type: "none" };
     }
+  } else if (aiResolution?.type === "store_info") {
+    matchedStoreInformation = findStoreInformationByAiResolution(allStoreInformation, aiResolution);
+    if (!matchedStoreInformation.length) {
+      aiResolution = { ...aiResolution, type: "none" };
+    }
+  }
+
+  if (!matchedLocation && !matchedStoreInformation.length && !aiResolution) {
+    matchedLocation = await findLocationFromMessage(trimmedMessage);
+    matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
   }
 
   let reply;
@@ -519,7 +565,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   } else if (extractedFirstName) {
     updateFirstName(session.sessionId, extractedFirstName || trimmedMessage);
     reply = buildGenericHelpReply(resolvedLanguage);
-  } else if (isLocationIntent(trimmedMessage, resolvedLanguage)) {
+  } else if (aiResolution?.type === "none") {
     reply = buildUnknownLocationReply(resolvedLanguage);
   } else {
     const locationNames = await buildLocationContextText(resolvedLanguage);
