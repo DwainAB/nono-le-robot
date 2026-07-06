@@ -314,13 +314,27 @@ function buildStoreInfoSearchDocument(entry) {
     .join(" | ");
 }
 
-async function rankCatalogBySemanticSimilarity({ message, locations, storeInformation, products }) {
+function buildCatalogSearchDocument(catalog) {
+  return [
+    catalog.name,
+    catalog.slug,
+    catalog.description,
+    ...(catalog.aliases || []),
+    ...(catalog.products || []).map((product) => product.name),
+    ...Object.values(catalog.labels || {}).flatMap((label) => [label?.name, label?.description])
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+async function rankCatalogBySemanticSimilarity({ message, locations, storeInformation, products, catalogs }) {
   const queryEmbedding = await createEmbedding(message);
   if (!queryEmbedding) {
     return {
       rankedLocations: (locations || []).map((location) => ({ location, score: -1 })),
       rankedStoreInformation: (storeInformation || []).map((entry) => ({ entry, score: -1 })),
-      rankedProducts: (products || []).map((product) => ({ product, score: -1 }))
+      rankedProducts: (products || []).map((product) => ({ product, score: -1 })),
+      rankedCatalogs: (catalogs || []).map((catalog) => ({ catalog, score: -1 }))
     };
   }
 
@@ -354,10 +368,21 @@ async function rankCatalogBySemanticSimilarity({ message, locations, storeInform
     })
   );
 
+  const rankedCatalogs = await Promise.all(
+    (catalogs || []).map(async (catalog) => {
+      const embedding = await createEmbedding(buildCatalogSearchDocument(catalog));
+      return {
+        catalog,
+        score: cosineSimilarity(queryEmbedding, embedding)
+      };
+    })
+  );
+
   return {
     rankedLocations: rankedLocations.sort((left, right) => right.score - left.score),
     rankedStoreInformation: rankedStoreInformation.sort((left, right) => right.score - left.score),
-    rankedProducts: rankedProducts.sort((left, right) => right.score - left.score)
+    rankedProducts: rankedProducts.sort((left, right) => right.score - left.score),
+    rankedCatalogs: rankedCatalogs.sort((left, right) => right.score - left.score)
   };
 }
 
@@ -366,7 +391,10 @@ export async function resolveCatalogMatch({
   language,
   locations,
   storeInformation,
-  products
+  products,
+  catalogs,
+  history,
+  lastProposedProducts
 }) {
   if (!config.openAiApiKey) {
     return null;
@@ -375,12 +403,14 @@ export async function resolveCatalogMatch({
   const {
     rankedLocations,
     rankedStoreInformation,
-    rankedProducts
+    rankedProducts,
+    rankedCatalogs
   } = await rankCatalogBySemanticSimilarity({
     message,
     locations,
     storeInformation,
-    products
+    products,
+    catalogs
   });
 
   console.log(
@@ -400,9 +430,14 @@ export async function resolveCatalogMatch({
         kind: item.entry.kind,
         score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
       })),
-      topProducts: rankedProducts.slice(0, 5).map((item) => ({
+      topProducts: rankedProducts.slice(0, 8).map((item) => ({
         id: item.product.id,
         name: item.product.name,
+        score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
+      })),
+      topCatalogs: rankedCatalogs.slice(0, 5).map((item) => ({
+        id: item.catalog.id,
+        name: item.catalog.name,
         score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
       }))
     })
@@ -410,7 +445,8 @@ export async function resolveCatalogMatch({
 
   const prioritizedLocations = rankedLocations.slice(0, 6).map((item) => item.location);
   const prioritizedStoreInformation = rankedStoreInformation.slice(0, 6).map((item) => item.entry);
-  const prioritizedProducts = rankedProducts.slice(0, 6).map((item) => item.product);
+  const prioritizedProducts = rankedProducts.slice(0, 10).map((item) => item.product);
+  const prioritizedCatalogs = rankedCatalogs.slice(0, 5).map((item) => item.catalog);
 
   const locationCatalog = prioritizedLocations.map((location) => ({
     id: String(location.id),
@@ -450,6 +486,16 @@ export async function resolveCatalogMatch({
       currency: variant.currency
     })),
     labels: product.labels || {}
+  }));
+
+  const catalogCatalog = prioritizedCatalogs.map((catalog) => ({
+    id: String(catalog.id),
+    slug: catalog.slug || null,
+    name: catalog.name || null,
+    description: catalog.description || null,
+    aliases: Array.isArray(catalog.aliases) ? catalog.aliases : [],
+    locationNames: (catalog.locations || []).map((location) => location.name).filter(Boolean),
+    labels: catalog.labels || {}
   }));
 
   const locationCandidates = locationCatalog.map((location) => ({
@@ -492,41 +538,79 @@ export async function resolveCatalogMatch({
       ...product.aliases,
       ...Object.values(product.labels || {}).flatMap((label) => [label?.name, label?.description])
     ].filter(Boolean),
+    description: product.description || null,
     searchableContext: [product.description, ...product.catalogs].filter(Boolean),
     availableVariants: product.variants.map((variant) => variant.label)
   }));
 
+  const catalogCandidates = catalogCatalog.map((catalog) => ({
+    id: catalog.id,
+    names: [
+      catalog.name,
+      catalog.slug,
+      ...catalog.aliases,
+      ...Object.values(catalog.labels || {}).flatMap((label) => [label?.name, label?.description])
+    ].filter(Boolean),
+    searchableContext: [catalog.description, ...catalog.locationNames].filter(Boolean)
+  }));
+
+  const recentHistory = (history || []).slice(-6).map((item) => ({
+    role: item.role,
+    content: item.content
+  }));
+
+  const lastProposedProductCandidates = (lastProposedProducts || []).map((product) => ({
+    id: String(product.id),
+    name: product.name
+  }));
+
   const systemPrompt = [
-    "Tu aides un backend a comprendre une demande client dans n'importe quelle langue actuelle ou future.",
-    "Le catalogue est dynamique et vient d'un backoffice.",
+    "Tu aides un backend a comprendre une demande client dans n'importe quelle langue actuelle ou future, dans le cadre d'une conversation qui peut se derouler sur plusieurs messages.",
+    "Le catalogue est dynamique et vient d'un backoffice. Il contient des catalogues (regroupements de produits, ex: Maroquinerie, Fragrance), des produits individuels, des lieux et des informations magasin.",
     "Tu dois faire une resolution semantique robuste entre la demande et le catalogue, meme si la demande et les donnees ne sont pas dans la meme langue.",
     "Tu dois raisonner sur le sens, pas sur des mots exacts.",
     "Tu dois choisir uniquement parmi les candidats fournis.",
-    "Tu ne dois jamais inventer un identifiant, un lieu, un produit ou une information qui n'existe pas dans le catalogue fourni.",
-    "Si la demande vise un produit precis vendu en boutique (sac, chaussure, article, parfum...), retourne l'identifiant canonique de ce produit avec type product.",
-    "Chaque produit peut avoir plusieurs variantes (par exemple des contenances differentes comme 100ml, 200ml, 500ml), chacune avec son propre prix.",
-    "Si la demande du client precise une variante particuliere (par exemple elle mentionne une contenance, une taille ou un format precis, ou demande le prix d'une variante specifique), tu dois identifier exactement quelle variante parmi availableVariants correspond et la renvoyer dans variantLabel en recopiant exactement son libelle tel qu'il apparait dans le catalogue.",
-    "Si la demande ne precise aucune variante particuliere, laisse variantLabel a null: le backend presentera alors toutes les variantes disponibles.",
-    "Si la demande vise un rayon, un service ou un lieu general (sans viser un produit precis), retourne l'identifiant canonique de ce lieu avec type location.",
-    "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information avec type store_info.",
+    "Tu ne dois jamais inventer un identifiant, un lieu, un produit, un catalogue ou une information qui n'existe pas dans le catalogue fourni.",
+    "",
+    "Voici les types de reponse possibles et quand les utiliser:",
+    "",
+    "- type product: la demande vise un produit precis et identifiable (le client connait deja le nom du produit, ou un seul produit correspond clairement). Retourne productId. Chaque produit peut avoir plusieurs variantes (par exemple des contenances differentes comme 100ml, 200ml, 500ml), chacune avec son propre prix. Si la demande precise une variante particuliere, identifie exactement quelle variante parmi availableVariants correspond et renvoie-la dans variantLabel en recopiant exactement son libelle. Sinon laisse variantLabel a null.",
+    "",
+    "- type product_list: la demande vise une categorie ou un type de produit de maniere large ou avec un critere de filtrage (par exemple: un parfum en particulier avec une caracteristique comme fruite/boise/leger, un type d'article dans un catalogue qui contient plusieurs produits similaires), et PLUSIEURS produits du catalogue correspondent raisonnablement. Retourne productIds: une liste de 3 a 5 identifiants de produits parmi les plus pertinents, en te basant sur le nom et surtout la description de chaque produit pour juger de la pertinence du filtrage demande (par exemple fruite, boise, leger, etc). Si moins de 3 produits pertinents existent, retourne uniquement ceux qui sont vraiment pertinents.",
+    "",
+    "- type clarify: la demande exprime une intention d'achat ou de recherche mais reste trop vague pour cibler un produit ou une liste pertinente (par exemple le client dit seulement je cherche un parfum, sans aucun autre critere, et le catalogue contient plusieurs parfums varies). Retourne clarifyingQuestion: une courte question naturelle et polie pour affiner la recherche (par exemple demander le type de parfum recherche, fruite, boise, floral, etc, en te basant sur les descriptions des produits disponibles dans le catalogue pour proposer des pistes pertinentes). N'utilise ce type que si une clarification aiderait reellement a affiner un choix parmi plusieurs options.",
+    "",
+    "- type product_detail_from_list: le message precedent du robot (visible dans l'historique de conversation) a propose une liste de plusieurs produits, et le client demande maintenant plus d'informations sur l'un d'entre eux (par exemple donne-moi plus d'infos sur le deuxieme, ou en me citant son nom). Utilise lastProposedProducts pour identifier lequel des produits recemment proposes est vise, et retourne son identifiant dans productId.",
+    "",
+    "- type catalog: la demande vise un type d'article ou de rayon general correspondant a un catalogue entier plutot qu'a un produit precis (par exemple avez-vous des portemonnaie, ou le client demande un type d'article generique sans viser un produit specifique et qu'aucun produit individuel ne correspond mieux). Retourne l'identifiant canonique de ce catalogue dans catalogId.",
+    "",
+    "- type location: la demande vise un rayon, un service ou un lieu general qui n'est ni un produit ni un catalogue de produits. Retourne locationId.",
+    "",
+    "- type store_info: la demande correspond a une information generale du magasin (horaires, contact, evenements...). Retourne storeInfoId.",
+    "",
+    "- type general: la demande est generale ou conversationnelle et ne vise clairement ni un lieu, ni un produit, ni un catalogue, ni une information magasin.",
+    "",
+    "- type none: la demande semble viser un lieu, un produit, un catalogue ou une information du magasin mais aucune correspondance fiable n'existe.",
+    "",
     "Les equivalences de sens, les abreviations, les formulations polies, les fautes, les variantes de langues et les traductions implicites doivent etre comprises.",
     "Exemples de meme sens: toilettes, wc, bathroom, restroom, bano, aseos.",
     "Si la demande est une question de localisation ou de recherche, ne retourne jamais type general.",
-    "Si la demande est generale ou conversationnelle et ne vise pas clairement un lieu, un produit ni une information catalogue, retourne type general.",
-    "Si la demande semble viser un lieu, un produit, un service ou une information du magasin mais qu'aucune correspondance fiable n'existe, retourne type none.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|product|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"location|store_info|product|product_list|clarify|product_detail_from_list|catalog|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"productIds\":[\"id\",\"...\"],\"catalogId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"clarifyingQuestion\":\"question ou null\",\"reason\":\"courte explication\"}"
   ].join(" ");
 
   const userPrompt = JSON.stringify(
     {
       customerLanguage: language || "fr",
       customerMessage: message,
+      conversationHistory: recentHistory,
+      lastProposedProducts: lastProposedProductCandidates,
       catalog: {
         locations: locationCandidates,
         storeInformation: storeInfoCandidates,
-        products: productCandidates
+        products: productCandidates,
+        catalogs: catalogCandidates
       }
     },
     null,
@@ -556,7 +640,17 @@ export async function resolveCatalogMatch({
             properties: {
               type: {
                 type: "string",
-                enum: ["location", "store_info", "product", "general", "none"]
+                enum: [
+                  "location",
+                  "store_info",
+                  "product",
+                  "product_list",
+                  "clarify",
+                  "product_detail_from_list",
+                  "catalog",
+                  "general",
+                  "none"
+                ]
               },
               locationId: {
                 anyOf: [
@@ -576,7 +670,23 @@ export async function resolveCatalogMatch({
                   { type: "null" }
                 ]
               },
+              productIds: {
+                type: "array",
+                items: { type: "string" }
+              },
+              catalogId: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
               variantLabel: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
+              clarifyingQuestion: {
                 anyOf: [
                   { type: "string" },
                   { type: "null" }
@@ -586,7 +696,17 @@ export async function resolveCatalogMatch({
                 type: "string"
               }
             },
-            required: ["type", "locationId", "storeInfoId", "productId", "variantLabel", "reason"]
+            required: [
+              "type",
+              "locationId",
+              "storeInfoId",
+              "productId",
+              "productIds",
+              "catalogId",
+              "variantLabel",
+              "clarifyingQuestion",
+              "reason"
+            ]
           }
         }
       }

@@ -32,7 +32,8 @@ function getSession(sessionId) {
   if (!sessions.has(resolvedSessionId)) {
     sessions.set(resolvedSessionId, {
       history: [],
-      firstName: null
+      firstName: null,
+      lastProposedProducts: []
     });
   }
   return {
@@ -42,7 +43,7 @@ function getSession(sessionId) {
 }
 
 function pushHistory(sessionId, role, content) {
-  const session = sessions.get(sessionId) || { history: [], firstName: null };
+  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
   const history = session.history || [];
   history.push({ role, content });
   if (history.length > 20) {
@@ -55,10 +56,18 @@ function pushHistory(sessionId, role, content) {
 }
 
 function updateFirstName(sessionId, firstName) {
-  const session = sessions.get(sessionId) || { history: [], firstName: null };
+  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
   sessions.set(sessionId, {
     ...session,
     firstName
+  });
+}
+
+function updateLastProposedProducts(sessionId, products) {
+  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
+  sessions.set(sessionId, {
+    ...session,
+    lastProposedProducts: products
   });
 }
 
@@ -347,6 +356,51 @@ function findProductByAiResolution(allProducts, aiResolution) {
   });
 }
 
+function findCatalogByAiResolution(allCatalogs, aiResolution) {
+  if (!aiResolution || aiResolution.type !== "catalog" || !aiResolution.catalogId) {
+    return null;
+  }
+
+  const normalizedTarget = String(aiResolution.catalogId || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  return (allCatalogs || []).find((catalog) => {
+    const candidates = [
+      catalog.id,
+      catalog.slug,
+      catalog.name,
+      ...Object.values(catalog.labels || {}).map((label) => label?.name),
+      ...(catalog.aliases || [])
+    ]
+      .map((candidate) =>
+        String(candidate || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim()
+      )
+      .filter(Boolean);
+    return candidates.includes(normalizedTarget);
+  });
+}
+
+function pickBestCatalogForProduct(product) {
+  const catalogs = Array.isArray(product?.catalogs) ? product.catalogs : [];
+  return catalogs.slice().sort((left, right) => (left.priority || 0) - (right.priority || 0))[0] || null;
+}
+
+function findBestLocationForProduct(product, allCatalogs) {
+  const bestCatalogRef = pickBestCatalogForProduct(product);
+  if (!bestCatalogRef) {
+    return null;
+  }
+  const fullCatalog = (allCatalogs || []).find((catalog) => catalog.id === bestCatalogRef.id) || null;
+  return fullCatalog?.locations?.slice().sort((left, right) => left.priority - right.priority)[0] || null;
+}
+
 function formatPrice(price, currency, language) {
   if (price === null || price === undefined) {
     return null;
@@ -360,11 +414,6 @@ function formatPrice(price, currency, language) {
   } catch {
     return `${price} ${currency || "EUR"}`;
   }
-}
-
-function pickBestCatalogForProduct(product) {
-  const catalogs = Array.isArray(product?.catalogs) ? product.catalogs : [];
-  return catalogs.slice().sort((left, right) => (left.priority || 0) - (right.priority || 0))[0] || null;
 }
 
 function cheapestVariant(variants) {
@@ -441,6 +490,86 @@ function buildProductReplyFallback({ product, variant, location, language }) {
     case "fr":
     default:
       return `${intro}. Vous le trouverez a ${locationName}. Souhaitez-vous que je vous y guide ?`;
+  }
+}
+
+function buildProductListReply(products, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const names = products.map((product) => product.labels?.[resolvedLanguage]?.name || product.name);
+  const listText = names.join(", ");
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `Here are a few options that might interest you: ${listText}. Would you like more details on one of them?`;
+    case "es":
+      return `Aquí tiene algunas opciones que podrían interesarle: ${listText}. ¿Quiere más información sobre alguna?`;
+    case "ru":
+      return `Вот несколько вариантов, которые могут вас заинтересовать: ${listText}. Хотите узнать больше о каком-то из них?`;
+    case "zh":
+      return `这里有几款可能您会喜欢的产品：${listText}。需要了解某一款的更多信息吗？`;
+    case "ar":
+      return `إليك بعض الخيارات التي قد تعجبك: ${listText}. هل تريد مزيدًا من المعلومات عن أحدها؟`;
+    case "fr":
+    default:
+      return `Voici une petite liste de nos produits qui pourrait vous plaire : ${listText}. Souhaitez-vous plus d'informations sur l'un d'entre eux ?`;
+  }
+}
+
+function buildCatalogReplyText(catalog, location, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const name = catalog.labels?.[resolvedLanguage]?.name || catalog.name;
+  const locationName = location ? location.name : null;
+
+  if (!locationName) {
+    switch (resolvedLanguage) {
+      case "en":
+        return `Yes, we do have a ${name} selection.`;
+      case "es":
+        return `Sí, tenemos una selección de ${name}.`;
+      case "ru":
+        return `Да, у нас есть подборка: ${name}.`;
+      case "zh":
+        return `是的，我们有${name}系列。`;
+      case "ar":
+        return `نعم، لدينا تشكيلة من ${name}.`;
+      case "fr":
+      default:
+        return `Oui, nous avons une selection de ${name}.`;
+    }
+  }
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `Yes, we do. You will find our ${name} selection at ${locationName}. Would you like me to guide you there?`;
+    case "es":
+      return `Sí, claro. Encontrará nuestra selección de ${name} en ${locationName}. ¿Quiere que le acompañe hasta allí?`;
+    case "ru":
+      return `Да, конечно. Подборку ${name} вы найдёте здесь: ${locationName}. Проводить вас туда?`;
+    case "zh":
+      return `当然有。我们的${name}系列在${locationName}。需要我带您过去吗？`;
+    case "ar":
+      return `بالتأكيد. ستجد تشكيلة ${name} في ${locationName}. هل تريد أن أرافقك إلى هناك؟`;
+    case "fr":
+    default:
+      return `Bien sur, nous en avons. Ils se situent cote ${locationName}. Souhaitez-vous que je vous y accompagne ?`;
+  }
+}
+
+function buildClarifyingReplyFallback(language) {
+  switch (normalizeLanguage(language)) {
+    case "en":
+      return "Could you tell me a bit more about what you are looking for?";
+    case "es":
+      return "¿Podría decirme un poco más sobre lo que busca?";
+    case "ru":
+      return "Не могли бы вы уточнить, что именно вы ищете?";
+    case "zh":
+      return "能再具体说说您想找什么样的产品吗？";
+    case "ar":
+      return "هل يمكنك إخباري بمزيد من التفاصيل عمّا تبحث عنه؟";
+    case "fr":
+    default:
+      return "Pourriez-vous m'en dire un peu plus sur ce que vous recherchez ?";
   }
 }
 
@@ -625,6 +754,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   let matchedLocation = null;
   let matchedStoreInformation = [];
   let matchedProduct = null;
+  let matchedProductList = null;
+  let matchedCatalog = null;
+  let clarifyingQuestion = null;
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
   const navigableSet = new Set(
@@ -652,6 +784,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
   pushHistory(session.sessionId, "user", trimmedMessage);
 
+  const allCatalogs = await listCatalogs();
   let aiResolution = null;
   try {
     aiResolution = await resolveCatalogMatch({
@@ -659,7 +792,10 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       language: resolvedLanguage,
       locations: allLocations,
       storeInformation: allStoreInformation,
-      products: allProducts
+      products: allProducts,
+      catalogs: allCatalogs,
+      history,
+      lastProposedProducts: session.session.lastProposedProducts
     });
   } catch {
     aiResolution = null;
@@ -690,19 +826,38 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     if (!matchedStoreInformation.length) {
       aiResolution = { ...aiResolution, type: "none" };
     }
-  } else if (aiResolution?.type === "product") {
-    const aiResolvedProduct = findProductByAiResolution(allProducts, aiResolution);
+  } else if (aiResolution?.type === "product" || aiResolution?.type === "product_detail_from_list") {
+    const aiResolvedProduct = findProductByAiResolution(allProducts, {
+      ...aiResolution,
+      type: "product"
+    });
     if (aiResolvedProduct) {
-      const bestCatalog = pickBestCatalogForProduct(aiResolvedProduct);
-      const allCatalogs = bestCatalog ? await listCatalogs() : [];
-      const fullCatalog = allCatalogs.find((catalog) => catalog.id === bestCatalog?.id) || null;
-      const location =
-        fullCatalog?.locations?.slice().sort((left, right) => left.priority - right.priority)[0] || null;
+      const location = findBestLocationForProduct(aiResolvedProduct, allCatalogs);
       const variant = matchVariantFromMessage(aiResolution.variantLabel, aiResolvedProduct.variants);
       matchedProduct = { product: aiResolvedProduct, variant, location };
     } else {
       aiResolution = { ...aiResolution, type: "none" };
     }
+  } else if (aiResolution?.type === "product_list") {
+    const requestedIds = Array.isArray(aiResolution.productIds) ? aiResolution.productIds : [];
+    matchedProductList = requestedIds
+      .map((productId) => findProductByAiResolution(allProducts, { type: "product", productId }))
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!matchedProductList.length) {
+      aiResolution = { ...aiResolution, type: "none" };
+    }
+  } else if (aiResolution?.type === "catalog") {
+    const aiResolvedCatalog = findCatalogByAiResolution(allCatalogs, aiResolution);
+    if (aiResolvedCatalog) {
+      const location =
+        aiResolvedCatalog.locations?.slice().sort((left, right) => left.priority - right.priority)[0] || null;
+      matchedCatalog = { catalog: aiResolvedCatalog, location };
+    } else {
+      aiResolution = { ...aiResolution, type: "none" };
+    }
+  } else if (aiResolution?.type === "clarify") {
+    clarifyingQuestion = aiResolution.clarifyingQuestion || buildClarifyingReplyFallback(resolvedLanguage);
   }
 
   if (!matchedLocation && !matchedStoreInformation.length && !matchedProduct && !aiResolution) {
@@ -800,6 +955,49 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           }
         : null
     };
+  } else if (matchedProductList) {
+    reply = buildProductListReply(matchedProductList, resolvedLanguage);
+    updateLastProposedProducts(session.sessionId, matchedProductList);
+
+    action = {
+      type: "product_list",
+      products: matchedProductList.map((product) => ({
+        id: product.id,
+        name: product.labels?.[resolvedLanguage]?.name || product.name,
+        description: product.labels?.[resolvedLanguage]?.description || product.description,
+        imageUrl: product.imageUrl,
+        variants: (product.variants || []).map((variant) => ({
+          label: variant.label,
+          price: variant.price,
+          currency: variant.currency
+        }))
+      }))
+    };
+  } else if (matchedCatalog) {
+    const location = matchedCatalog.location;
+    const locationNavigationCandidates = location
+      ? [location.id, location.slug, location.externalRobotId, location.name]
+          .map((candidate) => normalize(String(candidate || "")))
+          .filter(Boolean)
+      : [];
+
+    const canNavigate =
+      Boolean(location) &&
+      location.robotCanNavigate &&
+      location.isCurrentlyAvailable &&
+      (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
+
+    reply = buildCatalogReplyText(matchedCatalog.catalog, canNavigate ? location : null, resolvedLanguage);
+
+    action = canNavigate
+      ? {
+          type: "navigate",
+          destination: location.zone || location.name,
+          locationId: location.externalRobotId || location.slug || location.id
+        }
+      : null;
+  } else if (clarifyingQuestion) {
+    reply = clarifyingQuestion;
   } else if (matchedStoreInformation.length) {
     reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
   } else if (extractedFirstName) {
