@@ -132,3 +132,11 @@ CREATE TABLE IF NOT EXISTS store_information_translations (
     FOREIGN KEY (store_information_id) REFERENCES store_information(id)
     ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  id TINYINT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
+  killswitch_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO app_settings (id, killswitch_enabled) VALUES (1, 0);

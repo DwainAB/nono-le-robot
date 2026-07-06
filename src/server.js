@@ -11,6 +11,7 @@ import {
   upsertLocation,
   upsertStoreInformation
 } from "./store-map.js";
+import { getKillswitchState, setKillswitchState } from "./killswitch-service.js";
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
@@ -151,6 +152,30 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         entries
       });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/killswitch") {
+    try {
+      sendJson(response, 200, await getKillswitchState());
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/killswitch/set") {
+    try {
+      const body = await collectRequestBody(request);
+      const state = await setKillswitchState(Boolean(body.enabled));
+      sendJson(response, 200, state);
     } catch (error) {
       sendJson(response, 400, {
         error: error.message || "Erreur inconnue"
