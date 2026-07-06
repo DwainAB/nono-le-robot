@@ -2,6 +2,21 @@ import { config } from "./config.js";
 
 const embeddingCache = new Map();
 
+function extractOutputText(data) {
+  if (typeof data.output_text === "string") {
+    return data.output_text.trim() || null;
+  }
+
+  const text = (data.output || [])
+    .flatMap((item) => item.content || [])
+    .filter((content) => content.type === "output_text")
+    .map((content) => content.text)
+    .join("")
+    .trim();
+
+  return text || null;
+}
+
 export async function createAssistantReply({ message, sessionId, language, history, locationContext, navigableContext }) {
   if (!config.openAiApiKey) {
     return null;
@@ -77,7 +92,66 @@ export async function createAssistantReply({ message, sessionId, language, histo
   }
 
   const data = await response.json();
-  return data.output_text?.trim() || null;
+  return extractOutputText(data);
+}
+
+export async function createLocationReply({
+  subject,
+  place,
+  language,
+  canNavigate
+}) {
+  const targetLanguage = language || "fr";
+
+  if (!config.openAiApiKey) {
+    return null;
+  }
+
+  const systemPrompt = [
+    "Tu es la voix d'un robot d'accueil installe dans une boutique de luxe.",
+    "Ton ton est poli, fluide, sobre, chaleureux et professionnel.",
+    "Tu reponds pour l'oral, avec une phrase courte, claire et naturelle.",
+    "Tu n'utilises ni markdown, ni listes, ni emojis.",
+    `Tu reponds uniquement dans la langue demandee: ${targetLanguage}.`,
+    "On te donne un nom brut de lieu ou de rayon issu d'une base de donnees, et une description brute de son emplacement.",
+    "Tu dois reformuler ces informations brutes en une phrase naturelle qui indique au client ou se trouve ce qu'il cherche.",
+    "Tu ne recopies jamais le nom brut tel quel s'il n'est pas naturel a l'oral: utilise plutot une formulation courante et polie.",
+    "Par exemple wc devient les toilettes, salle 2 devient la salle numero 2.",
+    "Tu n'inventes jamais d'information qui n'est pas fournie.",
+    canNavigate
+      ? "Termine ta reponse par une proposition simple d'accompagnement du type: Souhaitez-vous que je vous y emmene ?"
+      : "Ne propose pas d'accompagnement, donne seulement l'information.",
+    "Exemple attendu: Les toilettes se trouvent au fond du couloir, a cote du bar. Souhaitez-vous que je vous y emmene ?"
+  ].join(" ");
+
+  const userPayload = JSON.stringify({
+    nomBrut: subject,
+    emplacementBrut: place,
+    langue: targetLanguage
+  });
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.openAiApiKey}`
+    },
+    body: JSON.stringify({
+      model: config.openAiModel,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPayload }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return extractOutputText(data);
 }
 
 export async function createAudioTranscription({

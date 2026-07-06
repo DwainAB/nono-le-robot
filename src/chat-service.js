@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createAssistantReply, resolveCatalogMatch } from "./openai-chat.js";
+import { createAssistantReply, createLocationReply, resolveCatalogMatch } from "./openai-chat.js";
 import {
   buildLocationContextText,
   buildStoreInformationContextText,
@@ -182,33 +182,37 @@ function buildPlaceDescription(location, language) {
   return primaryInfo;
 }
 
-function buildLocationReply(match, language) {
-  const resolvedLanguage = normalizeLanguage(language);
-  const location = match.location;
-  const subject =
-    localizeItemName(match.item, resolvedLanguage) ||
-    match.itemName ||
-    localizeLocationName(location, resolvedLanguage);
-  const place = buildPlaceDescription(location, resolvedLanguage);
-
+function buildLocationReplyFallback(subject, place, resolvedLanguage, canNavigate) {
   switch (resolvedLanguage) {
     case "en":
-      return `You can find ${subject} at ${place}. I can take you there if you want.`;
+      return canNavigate
+        ? `You can find ${subject} at ${place}. I can take you there if you want.`
+        : `You can find ${subject} at ${place}.`;
     case "es":
-      return `Puede encontrar ${subject} en ${place}. Puedo acompañarle hasta allí si lo desea.`;
+      return canNavigate
+        ? `Puede encontrar ${subject} en ${place}. Puedo acompañarle hasta allí si lo desea.`
+        : `Puede encontrar ${subject} en ${place}.`;
     case "ru":
-      return `${subject} находится здесь: ${place}. Я могу вас туда проводить, если хотите.`;
+      return canNavigate
+        ? `${subject} находится здесь: ${place}. Я могу вас туда проводить, если хотите.`
+        : `${subject} находится здесь: ${place}.`;
     case "zh":
-      return `您可以在${place}找到${subject}。如果您愿意，我可以带您过去。`;
+      return canNavigate
+        ? `您可以在${place}找到${subject}。如果您愿意，我可以带您过去。`
+        : `您可以在${place}找到${subject}。`;
     case "ar":
-      return `يمكنك العثور على ${subject} في ${place}. يمكنني أن آخذك إليها إذا أردت.`;
+      return canNavigate
+        ? `يمكنك العثور على ${subject} في ${place}. يمكنني أن آخذك إليها إذا أردت.`
+        : `يمكنك العثور على ${subject} في ${place}.`;
     case "fr":
     default:
-      return `Vous trouverez ${subject} à ${place}. Je peux vous y guider si vous voulez.`;
+      return canNavigate
+        ? `Vous trouverez ${subject} à ${place}. Je peux vous y guider si vous voulez.`
+        : `Vous trouverez ${subject} à ${place}.`;
   }
 }
 
-function buildLocationOnlyReply(match, language) {
+async function buildLocationReplyText(match, language, canNavigate) {
   const resolvedLanguage = normalizeLanguage(language);
   const location = match.location;
   const subject =
@@ -217,21 +221,29 @@ function buildLocationOnlyReply(match, language) {
     localizeLocationName(location, resolvedLanguage);
   const place = buildPlaceDescription(location, resolvedLanguage);
 
-  switch (resolvedLanguage) {
-    case "en":
-      return `You can find ${subject} at ${place}.`;
-    case "es":
-      return `Puede encontrar ${subject} en ${place}.`;
-    case "ru":
-      return `${subject} находится здесь: ${place}.`;
-    case "zh":
-      return `您可以在${place}找到${subject}。`;
-    case "ar":
-      return `يمكنك العثور على ${subject} في ${place}.`;
-    case "fr":
-    default:
-      return `Vous trouverez ${subject} à ${place}.`;
+  try {
+    const reply = await createLocationReply({
+      subject,
+      place,
+      language: resolvedLanguage,
+      canNavigate
+    });
+    if (reply) {
+      return reply;
+    }
+  } catch {
+    // fall through to the fixed template below
   }
+
+  return buildLocationReplyFallback(subject, place, resolvedLanguage, canNavigate);
+}
+
+function buildLocationReply(match, language) {
+  return buildLocationReplyText(match, language, true);
+}
+
+function buildLocationOnlyReply(match, language) {
+  return buildLocationReplyText(match, language, false);
 }
 
 function findLocationByAiResolution(allLocations, aiResolution) {
@@ -567,7 +579,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
 
     if (canNavigate) {
-      reply = buildLocationReply(matchedLocation, resolvedLanguage);
+      reply = await buildLocationReply(matchedLocation, resolvedLanguage);
       action = {
         type: "navigate",
         destination: matchedLocation.location.zone || matchedLocation.location.name,
@@ -577,7 +589,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           matchedLocation.location.id
       };
     } else {
-      reply = buildLocationOnlyReply(matchedLocation, resolvedLanguage);
+      reply = await buildLocationOnlyReply(matchedLocation, resolvedLanguage);
     }
   } else if (matchedStoreInformation.length) {
     reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
