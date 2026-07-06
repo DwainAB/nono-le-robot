@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
+import { WebSocketServer } from "ws";
 import { config } from "./config.js";
 import { handleChat } from "./chat-service.js";
 import { handleTranscription } from "./transcribe-service.js";
+import { streamCartesiaTts } from "./cartesia-tts-service.js";
 import { bootstrapDatabase, isDatabaseConfigured, testDatabaseConnection } from "./db.js";
 import {
   listKnownLocations,
@@ -187,6 +189,65 @@ const server = createServer(async (request, response) => {
   sendJson(response, 404, {
     error: "Route introuvable"
   });
+});
+
+const ttsWebSocketServer = new WebSocketServer({ noServer: true });
+
+ttsWebSocketServer.on("connection", (clientSocket) => {
+  let activeGeneration = null;
+
+  clientSocket.on("message", (raw) => {
+    let request;
+    try {
+      request = JSON.parse(raw.toString());
+    } catch {
+      clientSocket.send(JSON.stringify({ type: "error", message: "JSON invalide" }));
+      return;
+    }
+
+    const text = String(request.text || "").trim();
+    const language = String(request.language || "fr");
+    if (!text) {
+      clientSocket.send(JSON.stringify({ type: "error", message: "Texte vide" }));
+      return;
+    }
+
+    activeGeneration?.cancel();
+    activeGeneration = streamCartesiaTts({
+      text,
+      language,
+      onAudioChunk: (chunk) => {
+        if (clientSocket.readyState === clientSocket.OPEN) {
+          clientSocket.send(chunk, { binary: true });
+        }
+      },
+      onDone: () => {
+        if (clientSocket.readyState === clientSocket.OPEN) {
+          clientSocket.send(JSON.stringify({ type: "done" }));
+        }
+      },
+      onError: (error) => {
+        if (clientSocket.readyState === clientSocket.OPEN) {
+          clientSocket.send(JSON.stringify({ type: "error", message: error.message }));
+        }
+      }
+    });
+  });
+
+  clientSocket.on("close", () => {
+    activeGeneration?.cancel();
+  });
+});
+
+server.on("upgrade", (request, socket, head) => {
+  const { pathname } = new URL(request.url || "/", `http://${request.headers.host}`);
+  if (pathname === "/ws/tts") {
+    ttsWebSocketServer.handleUpgrade(request, socket, head, (clientSocket) => {
+      ttsWebSocketServer.emit("connection", clientSocket, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 
 async function startServer() {

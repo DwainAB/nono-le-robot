@@ -25,6 +25,17 @@ export const config = {
   openAiModel: process.env.OPENAI_MODEL || "gpt-4.1-mini",
   openAiTranscriptionModel: process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe",
   openAiEmbeddingModel: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-large",
+  cartesiaApiKey: process.env.CARTESIA_API_KEY || "",
+  cartesiaModelId: process.env.CARTESIA_MODEL_ID || "sonic-3.5",
+  cartesiaVersion: process.env.CARTESIA_VERSION || "2026-03-01",
+  cartesiaVoiceIds: {
+    fr: process.env.CARTESIA_VOICE_ID_FR || "",
+    en: process.env.CARTESIA_VOICE_ID_EN || "",
+    es: process.env.CARTESIA_VOICE_ID_ES || "",
+    ru: process.env.CARTESIA_VOICE_ID_RU || "",
+    zh: process.env.CARTESIA_VOICE_ID_ZH || "",
+    ar: process.env.CARTESIA_VOICE_ID_AR || ""
+  },
   databaseUrl: process.env.DATABASE_URL || "",
   dbHost: process.env.DB_HOST || process.env.MYSQLHOST || "",
   dbPort: process.env.DB_PORT || process.env.MYSQLPORT || "3306",
