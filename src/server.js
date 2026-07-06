@@ -6,6 +6,7 @@ import { handleTranscription } from "./transcribe-service.js";
 import { streamCartesiaTts } from "./cartesia-tts-service.js";
 import { bootstrapDatabase, isDatabaseConfigured, testDatabaseConnection } from "./db.js";
 import {
+  deleteLocation,
   listKnownLocations,
   listStoreInformation,
   syncRobotLocations,
@@ -195,6 +196,19 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         location
       });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/locations/delete") {
+    try {
+      const body = await collectRequestBody(request);
+      const result = await deleteLocation(body.id);
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 400, {
         error: error.message || "Erreur inconnue"

@@ -503,6 +503,29 @@ export async function upsertLocation(locationInput) {
   return mapLocationRow(rows[0]);
 }
 
+export async function deleteLocation(locationId) {
+  if (!isDatabaseConfigured()) {
+    throw new Error("Base de donnees non configuree");
+  }
+
+  const id = Number(locationId);
+  if (!id) {
+    throw new Error("Identifiant de lieu manquant");
+  }
+
+  const pool = await getDbPool();
+  await pool.query("DELETE FROM location_aliases WHERE location_id = ?", [id]);
+  await pool.query("DELETE FROM location_translations WHERE location_id = ?", [id]);
+  await pool.query("DELETE FROM catalog_locations WHERE location_id = ?", [id]);
+  const [result] = await pool.query("DELETE FROM locations WHERE id = ?", [id]);
+
+  if (!result.affectedRows) {
+    throw new Error("Lieu introuvable");
+  }
+
+  return { id };
+}
+
 export async function upsertStoreInformation(infoInput) {
   if (!isDatabaseConfigured()) {
     throw new Error("Base de donnees non configuree");
