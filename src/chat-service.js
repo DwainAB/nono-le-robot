@@ -420,6 +420,34 @@ function cheapestVariant(variants) {
   return (variants || []).slice().sort((left, right) => left.price - right.price)[0] || null;
 }
 
+function allVariantsSamePrice(variants) {
+  if (!variants.length) return false;
+  const firstPrice = variants[0].price;
+  const firstCurrency = variants[0].currency;
+  return variants.every((variant) => variant.price === firstPrice && variant.currency === firstCurrency);
+}
+
+function buildAvailableSizesText(variants, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const labels = variants.map((variant) => variant.label).join(", ");
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `available in ${labels}`;
+    case "es":
+      return `disponible en ${labels}`;
+    case "ru":
+      return `доступно в: ${labels}`;
+    case "zh":
+      return `提供以下规格：${labels}`;
+    case "ar":
+      return `متوفر بالمقاسات: ${labels}`;
+    case "fr":
+    default:
+      return `disponible en ${labels}`;
+  }
+}
+
 function buildVariantPriceText(product, selectedVariant, language) {
   const resolvedLanguage = normalizeLanguage(language);
   const variants = product.variants || [];
@@ -430,6 +458,11 @@ function buildVariantPriceText(product, selectedVariant, language) {
 
   if (variants.length === 1) {
     return formatPrice(variants[0].price, variants[0].currency, resolvedLanguage);
+  }
+
+  if (variants.length > 1 && allVariantsSamePrice(variants)) {
+    const priceText = formatPrice(variants[0].price, variants[0].currency, resolvedLanguage);
+    return `${priceText}, ${buildAvailableSizesText(variants, resolvedLanguage)}`;
   }
 
   if (variants.length > 1) {
@@ -459,15 +492,17 @@ function buildVariantPriceText(product, selectedVariant, language) {
   return null;
 }
 
-function buildProductReplyFallback({ product, variant, location, language }) {
+function buildProductReplyFallback({ product, variant, location, language, wantsPrice, wantsDescription }) {
   const resolvedLanguage = normalizeLanguage(language);
   const name = product.labels?.[resolvedLanguage]?.name || product.name;
   const description = product.labels?.[resolvedLanguage]?.description || product.description;
-  const priceText = buildVariantPriceText(product, variant, resolvedLanguage);
+  const shouldShowPrice = Boolean(wantsPrice);
+  const shouldShowDescription = Boolean(wantsDescription);
+  const priceText = shouldShowPrice ? buildVariantPriceText(product, variant, resolvedLanguage) : null;
   const locationName = location ? location.name : null;
 
   const parts = [name];
-  if (description) parts.push(description);
+  if (shouldShowDescription && description) parts.push(description);
   if (priceText) parts.push(priceText);
 
   const intro = parts.join(" - ");
@@ -676,6 +711,33 @@ function isLocationIntent(message, language) {
   return (patterns[normalizeLanguage(language)] || patterns.fr).some((pattern) => pattern.test(normalized));
 }
 
+function isPriceIntent(message) {
+  const normalized = String(message || "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  const patterns = [
+    /prix/i,
+    /combien/i,
+    /tarif/i,
+    /cout/i,
+    /coûte/i,
+    /price/i,
+    /cost/i,
+    /how much/i,
+    /precio/i,
+    /cuanto/i,
+    /cuánto/i,
+    /цена/i,
+    /сколько/i,
+    /价格/i,
+    /多少钱/i,
+    /سعر/i,
+    /كم/i
+  ];
+
+  return patterns.some((pattern) => pattern.test(normalized));
+}
+
 function buildNavigableContext(language, navigableLocations) {
   const resolvedLanguage = normalizeLanguage(language);
   if (!navigableLocations.length) {
@@ -834,7 +896,13 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     if (aiResolvedProduct) {
       const location = findBestLocationForProduct(aiResolvedProduct, allCatalogs);
       const variant = matchVariantFromMessage(aiResolution.variantLabel, aiResolvedProduct.variants);
-      matchedProduct = { product: aiResolvedProduct, variant, location };
+      matchedProduct = {
+        product: aiResolvedProduct,
+        variant,
+        location,
+        wantsPrice: Boolean(aiResolution.wantsPrice),
+        wantsDescription: Boolean(aiResolution.wantsDescription)
+      };
     } else {
       aiResolution = { ...aiResolution, type: "none" };
     }
@@ -869,7 +937,13 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       if (productMatches.length) {
         const product = productMatches[0].product;
         const variant = matchVariantFromMessage(trimmedMessage, product.variants);
-        matchedProduct = { product, variant, location: productMatches[0].location };
+        matchedProduct = {
+          product,
+          variant,
+          location: productMatches[0].location,
+          wantsPrice: isPriceIntent(trimmedMessage),
+          wantsDescription: false
+        };
       }
     }
   }
@@ -924,7 +998,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       product: matchedProduct.product,
       variant: matchedProduct.variant,
       location: canNavigate ? location : null,
-      language: resolvedLanguage
+      language: resolvedLanguage,
+      wantsPrice: matchedProduct.wantsPrice,
+      wantsDescription: matchedProduct.wantsDescription
     });
 
     action = {

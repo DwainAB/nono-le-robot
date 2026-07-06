@@ -576,11 +576,15 @@ export async function resolveCatalogMatch({
     "",
     "- type product: la demande vise un produit precis et identifiable (le client connait deja le nom du produit, ou un seul produit correspond clairement). Retourne productId. Chaque produit peut avoir plusieurs variantes (par exemple des contenances differentes comme 100ml, 200ml, 500ml), chacune avec son propre prix. Si la demande precise une variante particuliere, identifie exactement quelle variante parmi availableVariants correspond et renvoie-la dans variantLabel en recopiant exactement son libelle. Sinon laisse variantLabel a null.",
     "",
+    "Pour type product et product_detail_from_list, tu dois aussi indiquer si le client a explicitement demande le prix ou une information detaillee sur le produit:",
+    "- wantsPrice: true uniquement si le message du client demande explicitement le prix, le tarif, le cout, ou combien ca coute. Sinon false. Ne mets jamais true par defaut: le prix ne doit pas etre donne spontanement si le client ne l'a pas demande.",
+    "- wantsDescription: true si le client demande des details, plus d'informations, une description, ou pose une question sur les caracteristiques du produit (matiere, composition, notes olfactives, etc). Sinon false.",
+    "",
     "- type product_list: la demande vise une categorie ou un type de produit de maniere large ou avec un critere de filtrage (par exemple: un parfum en particulier avec une caracteristique comme fruite/boise/leger, un type d'article dans un catalogue qui contient plusieurs produits similaires), et PLUSIEURS produits du catalogue correspondent raisonnablement. Retourne productIds: une liste de 3 a 5 identifiants de produits parmi les plus pertinents, en te basant sur le nom et surtout la description de chaque produit pour juger de la pertinence du filtrage demande (par exemple fruite, boise, leger, etc). Si moins de 3 produits pertinents existent, retourne uniquement ceux qui sont vraiment pertinents.",
     "",
     "- type clarify: la demande exprime une intention d'achat ou de recherche mais reste trop vague pour cibler un produit ou une liste pertinente (par exemple le client dit seulement je cherche un parfum, sans aucun autre critere, et le catalogue contient plusieurs parfums varies). Retourne clarifyingQuestion: une courte question naturelle et polie pour affiner la recherche (par exemple demander le type de parfum recherche, fruite, boise, floral, etc, en te basant sur les descriptions des produits disponibles dans le catalogue pour proposer des pistes pertinentes). N'utilise ce type que si une clarification aiderait reellement a affiner un choix parmi plusieurs options.",
     "",
-    "- type product_detail_from_list: le message precedent du robot (visible dans l'historique de conversation) a propose une liste de plusieurs produits, et le client demande maintenant plus d'informations sur l'un d'entre eux (par exemple donne-moi plus d'infos sur le deuxieme, ou en me citant son nom). Utilise lastProposedProducts pour identifier lequel des produits recemment proposes est vise, et retourne son identifiant dans productId.",
+    "- type product_detail_from_list: le message precedent du robot (visible dans l'historique de conversation) a propose une liste de plusieurs produits, et le client demande maintenant plus d'informations sur l'un d'entre eux (par exemple donne-moi plus d'infos sur le deuxieme, ou en me citant son nom). Utilise lastProposedProducts pour identifier lequel des produits recemment proposes est vise, et retourne son identifiant dans productId. Pour ce type, mets wantsDescription a true (le client demande explicitement plus d'informations). Ne mets wantsPrice a true que si le client demande aussi explicitement le prix.",
     "",
     "- type catalog: la demande vise un type d'article ou de rayon general correspondant a un catalogue entier plutot qu'a un produit precis (par exemple avez-vous des portemonnaie, ou le client demande un type d'article generique sans viser un produit specifique et qu'aucun produit individuel ne correspond mieux). Retourne l'identifiant canonique de ce catalogue dans catalogId.",
     "",
@@ -597,7 +601,7 @@ export async function resolveCatalogMatch({
     "Si la demande est une question de localisation ou de recherche, ne retourne jamais type general.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|product|product_list|clarify|product_detail_from_list|catalog|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"productIds\":[\"id\",\"...\"],\"catalogId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"clarifyingQuestion\":\"question ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"location|store_info|product|product_list|clarify|product_detail_from_list|catalog|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"productIds\":[\"id\",\"...\"],\"catalogId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"wantsPrice\":true|false,\"wantsDescription\":true|false,\"clarifyingQuestion\":\"question ou null\",\"reason\":\"courte explication\"}"
   ].join(" ");
 
   const userPrompt = JSON.stringify(
@@ -686,6 +690,12 @@ export async function resolveCatalogMatch({
                   { type: "null" }
                 ]
               },
+              wantsPrice: {
+                type: "boolean"
+              },
+              wantsDescription: {
+                type: "boolean"
+              },
               clarifyingQuestion: {
                 anyOf: [
                   { type: "string" },
@@ -704,6 +714,8 @@ export async function resolveCatalogMatch({
               "productIds",
               "catalogId",
               "variantLabel",
+              "wantsPrice",
+              "wantsDescription",
               "clarifyingQuestion",
               "reason"
             ]
