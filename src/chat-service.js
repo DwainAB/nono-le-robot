@@ -8,6 +8,7 @@ import {
   listKnownLocations,
   listStoreInformation
 } from "./store-map.js";
+import { buildCatalogContextText, findProductFromMessage, listCatalogs, listProducts } from "./catalog-service.js";
 
 function normalize(value) {
   return String(value || "")
@@ -309,6 +310,91 @@ function findStoreInformationByAiResolution(allStoreInformation, aiResolution) {
   });
 }
 
+function findProductByAiResolution(allProducts, aiResolution) {
+  if (!aiResolution || aiResolution.type !== "product" || !aiResolution.productId) {
+    return null;
+  }
+
+  const normalizedTarget = String(aiResolution.productId || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  return (allProducts || []).find((product) => {
+    const candidates = [
+      product.id,
+      product.slug,
+      product.name,
+      ...Object.values(product.labels || {}).map((label) => label?.name),
+      ...(product.aliases || [])
+    ]
+      .map((candidate) =>
+        String(candidate || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim()
+      )
+      .filter(Boolean);
+    return candidates.includes(normalizedTarget);
+  });
+}
+
+function formatPrice(price, currency, language) {
+  if (price === null || price === undefined) {
+    return null;
+  }
+
+  try {
+    return new Intl.NumberFormat(normalizeLanguage(language) === "fr" ? "fr-FR" : normalizeLanguage(language), {
+      style: "currency",
+      currency: currency || "EUR"
+    }).format(price);
+  } catch {
+    return `${price} ${currency || "EUR"}`;
+  }
+}
+
+function pickBestCatalogForProduct(product) {
+  const catalogs = Array.isArray(product?.catalogs) ? product.catalogs : [];
+  return catalogs.slice().sort((left, right) => (left.priority || 0) - (right.priority || 0))[0] || null;
+}
+
+function buildProductReplyFallback({ product, location, language }) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const name = product.labels?.[resolvedLanguage]?.name || product.name;
+  const description = product.labels?.[resolvedLanguage]?.description || product.description;
+  const priceText = formatPrice(product.price, product.currency, resolvedLanguage);
+  const locationName = location ? location.name : null;
+
+  const parts = [name];
+  if (description) parts.push(description);
+  if (priceText) parts.push(priceText);
+
+  const intro = parts.join(" - ");
+
+  if (!locationName) {
+    return intro;
+  }
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `${intro}. You can find it at ${locationName}. Would you like me to guide you there?`;
+    case "es":
+      return `${intro}. Puede encontrarlo en ${locationName}. ¿Quiere que le acompañe hasta allí?`;
+    case "ru":
+      return `${intro}. Вы найдёте это здесь: ${locationName}. Проводить вас туда?`;
+    case "zh":
+      return `${intro}。您可以在${locationName}找到它。需要我带您过去吗？`;
+    case "ar":
+      return `${intro}. يمكنك إيجاده في ${locationName}. هل تريد أن أرافقك إلى هناك؟`;
+    case "fr":
+    default:
+      return `${intro}. Vous le trouverez a ${locationName}. Souhaitez-vous que je vous y guide ?`;
+  }
+}
+
 function buildStoreInformationReply(entries, language) {
   const resolvedLanguage = normalizeLanguage(language);
   const items = Array.isArray(entries) ? entries.filter(Boolean) : [];
@@ -486,8 +572,10 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   const history = session.session.history;
   const allLocations = await listKnownLocations();
   const allStoreInformation = await listStoreInformation();
+  const allProducts = await listProducts();
   let matchedLocation = null;
   let matchedStoreInformation = [];
+  let matchedProduct = null;
   const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
   const resolvedLanguage = normalizeLanguage(language);
   const navigableSet = new Set(
@@ -521,7 +609,8 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       message: trimmedMessage,
       language: resolvedLanguage,
       locations: allLocations,
-      storeInformation: allStoreInformation
+      storeInformation: allStoreInformation,
+      products: allProducts
     });
   } catch {
     aiResolution = null;
@@ -552,11 +641,30 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     if (!matchedStoreInformation.length) {
       aiResolution = { ...aiResolution, type: "none" };
     }
+  } else if (aiResolution?.type === "product") {
+    const aiResolvedProduct = findProductByAiResolution(allProducts, aiResolution);
+    if (aiResolvedProduct) {
+      const bestCatalog = pickBestCatalogForProduct(aiResolvedProduct);
+      const allCatalogs = bestCatalog ? await listCatalogs() : [];
+      const fullCatalog = allCatalogs.find((catalog) => catalog.id === bestCatalog?.id) || null;
+      const location =
+        fullCatalog?.locations?.slice().sort((left, right) => left.priority - right.priority)[0] || null;
+      matchedProduct = { product: aiResolvedProduct, location };
+    } else {
+      aiResolution = { ...aiResolution, type: "none" };
+    }
   }
 
-  if (!matchedLocation && !matchedStoreInformation.length && !aiResolution) {
+  if (!matchedLocation && !matchedStoreInformation.length && !matchedProduct && !aiResolution) {
     matchedLocation = await findLocationFromMessage(trimmedMessage);
     matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
+
+    if (!matchedLocation && !matchedStoreInformation.length) {
+      const productMatches = await findProductFromMessage(trimmedMessage, { limit: 1 });
+      if (productMatches.length) {
+        matchedProduct = { product: productMatches[0].product, location: productMatches[0].location };
+      }
+    }
   }
 
   let reply;
@@ -591,6 +699,44 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     } else {
       reply = await buildLocationOnlyReply(matchedLocation, resolvedLanguage);
     }
+  } else if (matchedProduct) {
+    const location = matchedProduct.location;
+    const locationNavigationCandidates = location
+      ? [location.id, location.slug, location.externalRobotId, location.name]
+          .map((candidate) => normalize(String(candidate || "")))
+          .filter(Boolean)
+      : [];
+
+    const canNavigate =
+      Boolean(location) &&
+      location.robotCanNavigate &&
+      location.isCurrentlyAvailable &&
+      (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
+
+    reply = buildProductReplyFallback({
+      product: matchedProduct.product,
+      location: canNavigate ? location : null,
+      language: resolvedLanguage
+    });
+
+    action = {
+      type: "product",
+      product: {
+        id: matchedProduct.product.id,
+        name: matchedProduct.product.labels?.[resolvedLanguage]?.name || matchedProduct.product.name,
+        description:
+          matchedProduct.product.labels?.[resolvedLanguage]?.description || matchedProduct.product.description,
+        imageUrl: matchedProduct.product.imageUrl,
+        price: matchedProduct.product.price,
+        currency: matchedProduct.product.currency
+      },
+      navigate: canNavigate
+        ? {
+            destination: location.zone || location.name,
+            locationId: location.externalRobotId || location.slug || location.id
+          }
+        : null
+    };
   } else if (matchedStoreInformation.length) {
     reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
   } else if (extractedFirstName) {
@@ -601,6 +747,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   } else {
     const locationNames = await buildLocationContextText(resolvedLanguage);
     const storeInformationContext = await buildStoreInformationContextText(resolvedLanguage);
+    const catalogContext = await buildCatalogContextText(resolvedLanguage);
     const navigableContext = buildNavigableContext(resolvedLanguage, navigableLocations);
 
     reply =
@@ -609,7 +756,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
         sessionId: session.sessionId,
         language: resolvedLanguage,
         history,
-        locationContext: [locationNames, storeInformationContext].filter(Boolean).join(" ; "),
+        locationContext: [locationNames, storeInformationContext, catalogContext].filter(Boolean).join(" ; "),
         navigableContext
       })) || buildFallbackReply(trimmedMessage, resolvedLanguage);
   }

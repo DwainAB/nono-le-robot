@@ -148,8 +148,7 @@ function mapLocationRow(row) {
     source: row.source,
     lastSeenByRobotAt: row.last_seen_by_robot_at,
     labels: {},
-    aliases: [],
-    items: []
+    aliases: []
   };
 }
 
@@ -173,23 +172,6 @@ async function fetchCatalogSnapshot() {
      FROM location_aliases
      WHERE is_active = 1`
   );
-  const [locationItemRows] = await pool.query(
-    `SELECT
-       li.location_id,
-       li.priority,
-       li.notes,
-       i.id AS item_id,
-       i.slug AS item_slug,
-       i.name AS item_name,
-       i.category AS item_category,
-       i.description AS item_description,
-       ia.alias AS item_alias
-     FROM location_items li
-     INNER JOIN items i ON i.id = li.item_id AND i.is_active = 1
-     LEFT JOIN item_aliases ia ON ia.item_id = i.id AND ia.is_active = 1
-     WHERE li.is_active = 1
-     ORDER BY li.priority ASC, i.name ASC`
-  );
   const [storeInformationRows] = await pool.query(
     `SELECT *
      FROM store_information
@@ -208,10 +190,6 @@ async function fetchCatalogSnapshot() {
     `SELECT location_id, language_code, name, zone, details, description
      FROM location_translations`
   );
-  const [itemTranslationRows] = await pool.query(
-    `SELECT item_id, language_code, name, category, description
-     FROM item_translations`
-  );
   const [storeInformationTranslationRows] = await pool.query(
     `SELECT store_information_id, language_code, title, value_text
      FROM store_information_translations`
@@ -219,8 +197,6 @@ async function fetchCatalogSnapshot() {
 
   const locations = locationRows.map(mapLocationRow);
   const locationsById = new Map(locations.map((location) => [Number(location.id), location]));
-  const itemRefsByLocationAndItem = new Map();
-  const itemRefsById = new Map();
   const storeInformationEntries = storeInformationRows.map((row) => ({
     id: String(row.id),
     slug: row.slug,
@@ -243,40 +219,8 @@ async function fetchCatalogSnapshot() {
     location.aliases.push(row.alias);
   }
 
-  for (const row of locationItemRows) {
-    const location = locationsById.get(Number(row.location_id));
-    if (!location) {
-      continue;
-    }
-
-    const itemKey = `${row.location_id}:${row.item_id}`;
-    let itemRef = itemRefsByLocationAndItem.get(itemKey);
-    if (!itemRef) {
-      itemRef = {
-        id: String(row.item_id),
-        slug: row.item_slug,
-        name: row.item_name,
-        category: row.item_category,
-        description: row.item_description,
-        priority: row.priority,
-        notes: row.notes,
-        aliases: []
-      };
-      itemRefsByLocationAndItem.set(itemKey, itemRef);
-      itemRefsById.set(Number(row.item_id), itemRef);
-      location.items.push(itemRef);
-    }
-
-    if (row.item_alias) {
-      itemRef.aliases.push(row.item_alias);
-    }
-  }
-
   for (const location of locations) {
     location.aliases = deduplicateStrings(location.aliases);
-    for (const item of location.items) {
-      item.aliases = deduplicateStrings(item.aliases);
-    }
   }
 
   for (const row of locationTranslationRows) {
@@ -290,21 +234,6 @@ async function fetchCatalogSnapshot() {
       name: cleanNullableText(row.name),
       zone: cleanNullableText(row.zone),
       details: cleanNullableText(row.details),
-      description: cleanNullableText(row.description)
-    };
-  }
-
-  for (const row of itemTranslationRows) {
-    const item = itemRefsById.get(Number(row.item_id));
-    const languageCode = normalizeLanguageCode(row.language_code);
-    if (!item || !languageCode) {
-      continue;
-    }
-
-    item.labels = item.labels || {};
-    item.labels[languageCode] = {
-      name: cleanNullableText(row.name),
-      category: cleanNullableText(row.category),
       description: cleanNullableText(row.description)
     };
   }
@@ -325,29 +254,6 @@ async function fetchCatalogSnapshot() {
   return {
     locations,
     storeInformation: storeInformationEntries
-  };
-}
-
-function chooseBestItemLocation(locations, item) {
-  const ordered = locations
-    .slice()
-    .sort((left, right) => {
-      if (left.location.robotCanNavigate !== right.location.robotCanNavigate) {
-        return Number(right.location.robotCanNavigate) - Number(left.location.robotCanNavigate);
-      }
-      if (left.location.isCurrentlyAvailable !== right.location.isCurrentlyAvailable) {
-        return Number(right.location.isCurrentlyAvailable) - Number(left.location.isCurrentlyAvailable);
-      }
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      return left.location.name.localeCompare(right.location.name, "fr");
-    });
-
-  return {
-    type: "item",
-    item,
-    location: ordered[0]?.location || null
   };
 }
 
@@ -397,50 +303,6 @@ export async function findLocationFromMessage(message) {
         };
       }
     }
-  }
-
-  let bestItem = null;
-  let bestItemScore = 0;
-  const candidateItemLocations = [];
-
-  for (const location of snapshot.locations) {
-    for (const item of location.items) {
-      const itemCandidates = [
-        item.name,
-        item.category,
-        item.description,
-        ...Object.values(item.labels || {}).flatMap((label) => [
-          label?.name,
-          label?.category,
-          label?.description
-        ]),
-        ...item.aliases
-      ];
-
-      for (const candidate of itemCandidates) {
-        const score = scoreCandidate(normalizedMessage, candidate);
-        if (score <= 0) {
-          continue;
-        }
-
-        if (score > bestItemScore) {
-          bestItemScore = score;
-          bestItem = item;
-          candidateItemLocations.length = 0;
-        }
-
-        if (score === bestItemScore) {
-          candidateItemLocations.push({
-            location,
-            priority: item.priority
-          });
-        }
-      }
-    }
-  }
-
-  if (bestItemScore > bestLocationScore && candidateItemLocations.length) {
-    return chooseBestItemLocation(candidateItemLocations, bestItem);
   }
 
   return bestLocationMatch;
@@ -513,13 +375,7 @@ export async function buildLocationContextText(language = "fr") {
           : "guidage robot indisponible actuellement"
         : "guidage robot impossible";
 
-      const itemsText = location.items.length
-        ? ` objets: ${location.items
-            .map((item) => item.labels?.[language]?.name || item.name)
-            .join(", ")}`
-        : "";
-
-      return `${localizedName}: ${localizedZone || "zone non renseignee"}, ${localizedDetails || "details non renseignes"}, ${availability}.${itemsText}`;
+      return `${localizedName}: ${localizedZone || "zone non renseignee"}, ${localizedDetails || "details non renseignes"}, ${availability}.`;
     })
     .join(" ; ");
 }
@@ -645,111 +501,6 @@ export async function upsertLocation(locationInput) {
 
   const [rows] = await pool.query("SELECT * FROM locations WHERE id = ? LIMIT 1", [locationId]);
   return mapLocationRow(rows[0]);
-}
-
-async function upsertItemRecord(pool, itemInput) {
-  const name = String(itemInput?.name || "").trim();
-  if (!name) {
-    throw new Error("Nom d'article manquant");
-  }
-
-  const slug = String(itemInput.slug || slugify(name)).trim();
-  const category = itemInput.category ? String(itemInput.category).trim() : null;
-  const description = itemInput.description ? String(itemInput.description).trim() : null;
-  const aliases = deduplicateStrings(Array.isArray(itemInput.aliases) ? itemInput.aliases : []);
-  const translations = cleanTranslationsMap(itemInput.translations, (value) => ({
-    name: cleanNullableText(value.name),
-    category: cleanNullableText(value.category),
-    description: cleanNullableText(value.description)
-  }));
-
-  const [existingRows] = await pool.query(
-    `SELECT *
-     FROM items
-     WHERE id = ? OR slug = ?
-     LIMIT 1`,
-    [Number(itemInput.id || 0), slug]
-  );
-
-  let itemId;
-
-  if (existingRows.length) {
-    await pool.query(
-      `UPDATE items
-       SET slug = ?, name = ?, category = ?, description = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [slug, name, category, description, existingRows[0].id]
-    );
-    itemId = Number(existingRows[0].id);
-  } else {
-    const [insertResult] = await pool.query(
-      `INSERT INTO items (slug, name, category, description)
-       VALUES (?, ?, ?, ?)`,
-      [slug, name, category, description]
-    );
-    itemId = Number(insertResult.insertId);
-  }
-
-  await pool.query("DELETE FROM item_aliases WHERE item_id = ?", [itemId]);
-  for (const alias of aliases) {
-    await pool.query(
-      `INSERT INTO item_aliases (item_id, alias)
-       VALUES (?, ?)`,
-      [itemId, alias]
-    );
-  }
-
-  await pool.query("DELETE FROM item_translations WHERE item_id = ?", [itemId]);
-  for (const [languageCode, translation] of Object.entries(translations)) {
-    await pool.query(
-      `INSERT INTO item_translations (item_id, language_code, name, category, description)
-       VALUES (?, ?, ?, ?, ?)`,
-      [itemId, languageCode, translation.name, translation.category, translation.description]
-    );
-  }
-
-  return itemId;
-}
-
-export async function replaceLocationItems(locationId, items) {
-  if (!isDatabaseConfigured()) {
-    throw new Error("Base de donnees non configuree");
-  }
-
-  const numericLocationId = Number(locationId);
-  if (!numericLocationId) {
-    throw new Error("locationId invalide");
-  }
-
-  const pool = await getDbPool();
-  const [locationRows] = await pool.query(
-    "SELECT id FROM locations WHERE id = ? AND is_active = 1 LIMIT 1",
-    [numericLocationId]
-  );
-
-  if (!locationRows.length) {
-    throw new Error("Lieu introuvable");
-  }
-
-  await pool.query("DELETE FROM location_items WHERE location_id = ?", [numericLocationId]);
-
-  const payloadItems = Array.isArray(items) ? items : [];
-  for (let index = 0; index < payloadItems.length; index += 1) {
-    const itemInput = payloadItems[index];
-    const itemId = await upsertItemRecord(pool, itemInput);
-    await pool.query(
-      `INSERT INTO location_items (location_id, item_id, priority, notes)
-       VALUES (?, ?, ?, ?)`,
-      [
-        numericLocationId,
-        itemId,
-        Number(itemInput.priority || (index + 1) * 10),
-        itemInput.notes ? String(itemInput.notes).trim() : null
-      ]
-    );
-  }
-
-  return listKnownLocations();
 }
 
 export async function upsertStoreInformation(infoInput) {

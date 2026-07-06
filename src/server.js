@@ -8,12 +8,21 @@ import { bootstrapDatabase, isDatabaseConfigured, testDatabaseConnection } from 
 import {
   listKnownLocations,
   listStoreInformation,
-  replaceLocationItems,
   syncRobotLocations,
   upsertLocation,
   upsertStoreInformation
 } from "./store-map.js";
+import {
+  listCatalogs,
+  listProducts,
+  replaceCatalogLocations,
+  replaceCatalogProducts,
+  upsertCatalog,
+  upsertProduct
+} from "./catalog-service.js";
 import { getKillswitchState, setKillswitchState } from "./killswitch-service.js";
+import { uploadProductImage } from "./image-storage-service.js";
+import busboy from "busboy";
 
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
@@ -23,6 +32,46 @@ function sendJson(response, statusCode, body) {
     "Access-Control-Allow-Headers": "Content-Type"
   });
   response.end(JSON.stringify(body));
+}
+
+function parseMultipartImage(request) {
+  return new Promise((resolve, reject) => {
+    const bb = busboy({
+      headers: request.headers,
+      limits: { fileSize: 8 * 1024 * 1024, files: 1 }
+    });
+
+    let fileBuffer = null;
+    let fileMimeType = null;
+    let fileTooLarge = false;
+
+    bb.on("file", (_name, stream, info) => {
+      const chunks = [];
+      fileMimeType = info.mimeType;
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("limit", () => {
+        fileTooLarge = true;
+      });
+      stream.on("end", () => {
+        fileBuffer = Buffer.concat(chunks);
+      });
+    });
+
+    bb.on("error", reject);
+    bb.on("close", () => {
+      if (fileTooLarge) {
+        reject(new Error("Image trop volumineuse (max 8 Mo)"));
+        return;
+      }
+      if (!fileBuffer) {
+        reject(new Error("Aucun fichier image reçu"));
+        return;
+      }
+      resolve({ buffer: fileBuffer, mimeType: fileMimeType });
+    });
+
+    request.pipe(bb);
+  });
 }
 
 function collectRequestBody(request) {
@@ -74,6 +123,20 @@ const server = createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/api/store-info") {
     sendJson(response, 200, {
       entries: await listStoreInformation()
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/catalogs") {
+    sendJson(response, 200, {
+      catalogs: await listCatalogs()
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/products") {
+    sendJson(response, 200, {
+      products: await listProducts()
     });
     return;
   }
@@ -132,12 +195,72 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/api/admin/location-items/replace") {
+  if (request.method === "POST" && url.pathname === "/api/admin/catalogs/upsert") {
     try {
       const body = await collectRequestBody(request);
-      const locations = await replaceLocationItems(body.locationId, body.items);
+      const catalog = await upsertCatalog(body);
       sendJson(response, 200, {
-        locations
+        catalog
+      });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/catalog-locations/replace") {
+    try {
+      const body = await collectRequestBody(request);
+      const catalogs = await replaceCatalogLocations(body.catalogId, body.locations);
+      sendJson(response, 200, {
+        catalogs
+      });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/catalog-products/replace") {
+    try {
+      const body = await collectRequestBody(request);
+      const catalogs = await replaceCatalogProducts(body.catalogId, body.products);
+      sendJson(response, 200, {
+        catalogs
+      });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/products/upsert") {
+    try {
+      const body = await collectRequestBody(request);
+      const product = await upsertProduct(body);
+      sendJson(response, 200, {
+        product
+      });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/products/upload-image") {
+    try {
+      const { buffer, mimeType } = await parseMultipartImage(request);
+      const uploaded = await uploadProductImage({ buffer, mimeType });
+      sendJson(response, 200, {
+        imageUrl: uploaded.url
       });
     } catch (error) {
       sendJson(response, 400, {

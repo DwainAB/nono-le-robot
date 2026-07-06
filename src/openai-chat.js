@@ -282,19 +282,20 @@ function buildLocationSearchDocument(location) {
       label?.zone,
       label?.details,
       label?.description
-    ]),
-    ...(location.items || []).flatMap((item) => [
-      item.name,
-      item.slug,
-      item.category,
-      item.description,
-      ...(item.aliases || []),
-      ...Object.values(item.labels || {}).flatMap((label) => [
-        label?.name,
-        label?.category,
-        label?.description
-      ])
     ])
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function buildProductSearchDocument(product) {
+  return [
+    product.name,
+    product.slug,
+    product.description,
+    ...(product.aliases || []),
+    ...(product.catalogs || []).map((catalog) => catalog.name),
+    ...Object.values(product.labels || {}).flatMap((label) => [label?.name, label?.description])
   ]
     .filter(Boolean)
     .join(" | ");
@@ -312,12 +313,13 @@ function buildStoreInfoSearchDocument(entry) {
     .join(" | ");
 }
 
-async function rankCatalogBySemanticSimilarity({ message, locations, storeInformation }) {
+async function rankCatalogBySemanticSimilarity({ message, locations, storeInformation, products }) {
   const queryEmbedding = await createEmbedding(message);
   if (!queryEmbedding) {
     return {
       rankedLocations: (locations || []).map((location) => ({ location, score: -1 })),
-      rankedStoreInformation: (storeInformation || []).map((entry) => ({ entry, score: -1 }))
+      rankedStoreInformation: (storeInformation || []).map((entry) => ({ entry, score: -1 })),
+      rankedProducts: (products || []).map((product) => ({ product, score: -1 }))
     };
   }
 
@@ -341,9 +343,20 @@ async function rankCatalogBySemanticSimilarity({ message, locations, storeInform
     })
   );
 
+  const rankedProducts = await Promise.all(
+    (products || []).map(async (product) => {
+      const embedding = await createEmbedding(buildProductSearchDocument(product));
+      return {
+        product,
+        score: cosineSimilarity(queryEmbedding, embedding)
+      };
+    })
+  );
+
   return {
     rankedLocations: rankedLocations.sort((left, right) => right.score - left.score),
-    rankedStoreInformation: rankedStoreInformation.sort((left, right) => right.score - left.score)
+    rankedStoreInformation: rankedStoreInformation.sort((left, right) => right.score - left.score),
+    rankedProducts: rankedProducts.sort((left, right) => right.score - left.score)
   };
 }
 
@@ -351,7 +364,8 @@ export async function resolveCatalogMatch({
   message,
   language,
   locations,
-  storeInformation
+  storeInformation,
+  products
 }) {
   if (!config.openAiApiKey) {
     return null;
@@ -359,11 +373,13 @@ export async function resolveCatalogMatch({
 
   const {
     rankedLocations,
-    rankedStoreInformation
+    rankedStoreInformation,
+    rankedProducts
   } = await rankCatalogBySemanticSimilarity({
     message,
     locations,
-    storeInformation
+    storeInformation,
+    products
   });
 
   console.log(
@@ -382,12 +398,18 @@ export async function resolveCatalogMatch({
         title: item.entry.title,
         kind: item.entry.kind,
         score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
+      })),
+      topProducts: rankedProducts.slice(0, 5).map((item) => ({
+        id: item.product.id,
+        name: item.product.name,
+        score: Number.isFinite(item.score) ? Number(item.score.toFixed(4)) : item.score
       }))
     })
   );
 
   const prioritizedLocations = rankedLocations.slice(0, 6).map((item) => item.location);
   const prioritizedStoreInformation = rankedStoreInformation.slice(0, 6).map((item) => item.entry);
+  const prioritizedProducts = rankedProducts.slice(0, 6).map((item) => item.product);
 
   const locationCatalog = prioritizedLocations.map((location) => ({
     id: String(location.id),
@@ -401,16 +423,7 @@ export async function resolveCatalogMatch({
     aliases: Array.isArray(location.aliases) ? location.aliases : [],
     robotCanNavigate: Boolean(location.robotCanNavigate),
     isCurrentlyAvailable: Boolean(location.isCurrentlyAvailable),
-    labels: location.labels || {},
-    items: (location.items || []).map((item) => ({
-      id: String(item.id),
-      slug: item.slug || null,
-      name: item.name || null,
-      category: item.category || null,
-      description: item.description || null,
-      aliases: Array.isArray(item.aliases) ? item.aliases : [],
-      labels: item.labels || {}
-    }))
+    labels: location.labels || {}
   }));
 
   const storeInfoCatalog = prioritizedStoreInformation.map((entry) => ({
@@ -420,6 +433,19 @@ export async function resolveCatalogMatch({
     title: entry.title || null,
     value: entry.value || null,
     labels: entry.labels || {}
+  }));
+
+  const productCatalog = prioritizedProducts.map((product) => ({
+    id: String(product.id),
+    slug: product.slug || null,
+    name: product.name || null,
+    description: product.description || null,
+    price: product.price ?? null,
+    currency: product.currency || null,
+    imageUrl: product.imageUrl || null,
+    aliases: Array.isArray(product.aliases) ? product.aliases : [],
+    catalogs: (product.catalogs || []).map((catalog) => catalog.name).filter(Boolean),
+    labels: product.labels || {}
   }));
 
   const locationCandidates = locationCatalog.map((location) => ({
@@ -436,24 +462,7 @@ export async function resolveCatalogMatch({
         label?.description
       ])
     ].filter(Boolean),
-    searchableContext: [
-      location.zone,
-      location.details,
-      location.floorLabel,
-      location.description,
-      ...(location.items || []).flatMap((item) => [
-        item.name,
-        item.slug,
-        item.category,
-        item.description,
-        ...(item.aliases || []),
-        ...Object.values(item.labels || {}).flatMap((label) => [
-          label?.name,
-          label?.category,
-          label?.description
-        ])
-      ])
-    ].filter(Boolean),
+    searchableContext: [location.zone, location.details, location.floorLabel, location.description].filter(Boolean),
     navigation: {
       robotCanNavigate: location.robotCanNavigate,
       isCurrentlyAvailable: location.isCurrentlyAvailable
@@ -471,23 +480,35 @@ export async function resolveCatalogMatch({
     value: entry.value
   }));
 
+  const productCandidates = productCatalog.map((product) => ({
+    id: product.id,
+    names: [
+      product.name,
+      product.slug,
+      ...product.aliases,
+      ...Object.values(product.labels || {}).flatMap((label) => [label?.name, label?.description])
+    ].filter(Boolean),
+    searchableContext: [product.description, ...product.catalogs].filter(Boolean)
+  }));
+
   const systemPrompt = [
     "Tu aides un backend a comprendre une demande client dans n'importe quelle langue actuelle ou future.",
     "Le catalogue est dynamique et vient d'un backoffice.",
     "Tu dois faire une resolution semantique robuste entre la demande et le catalogue, meme si la demande et les donnees ne sont pas dans la meme langue.",
     "Tu dois raisonner sur le sens, pas sur des mots exacts.",
     "Tu dois choisir uniquement parmi les candidats fournis.",
-    "Tu ne dois jamais inventer un identifiant, un lieu ou une information qui n'existe pas dans le catalogue fourni.",
-    "Si un produit, service, rayon ou besoin correspond a un lieu du catalogue, retourne l'identifiant canonique de ce lieu.",
-    "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information.",
+    "Tu ne dois jamais inventer un identifiant, un lieu, un produit ou une information qui n'existe pas dans le catalogue fourni.",
+    "Si la demande vise un produit precis vendu en boutique (sac, chaussure, article...), retourne l'identifiant canonique de ce produit avec type product.",
+    "Si la demande vise un rayon, un service ou un lieu general (sans viser un produit precis), retourne l'identifiant canonique de ce lieu avec type location.",
+    "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information avec type store_info.",
     "Les equivalences de sens, les abreviations, les formulations polies, les fautes, les variantes de langues et les traductions implicites doivent etre comprises.",
     "Exemples de meme sens: toilettes, wc, bathroom, restroom, bano, aseos.",
     "Si la demande est une question de localisation ou de recherche, ne retourne jamais type general.",
-    "Si la demande est generale ou conversationnelle et ne vise pas clairement un lieu ni une information catalogue, retourne type general.",
+    "Si la demande est generale ou conversationnelle et ne vise pas clairement un lieu, un produit ni une information catalogue, retourne type general.",
     "Si la demande semble viser un lieu, un produit, un service ou une information du magasin mais qu'aucune correspondance fiable n'existe, retourne type none.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"location|store_info|product|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"reason\":\"courte explication\"}"
   ].join(" ");
 
   const userPrompt = JSON.stringify(
@@ -496,7 +517,8 @@ export async function resolveCatalogMatch({
       customerMessage: message,
       catalog: {
         locations: locationCandidates,
-        storeInformation: storeInfoCandidates
+        storeInformation: storeInfoCandidates,
+        products: productCandidates
       }
     },
     null,
@@ -526,7 +548,7 @@ export async function resolveCatalogMatch({
             properties: {
               type: {
                 type: "string",
-                enum: ["location", "store_info", "general", "none"]
+                enum: ["location", "store_info", "product", "general", "none"]
               },
               locationId: {
                 anyOf: [
@@ -540,11 +562,17 @@ export async function resolveCatalogMatch({
                   { type: "null" }
                 ]
               },
+              productId: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
               reason: {
                 type: "string"
               }
             },
-            required: ["type", "locationId", "storeInfoId", "reason"]
+            required: ["type", "locationId", "storeInfoId", "productId", "reason"]
           }
         }
       }

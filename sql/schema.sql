@@ -46,61 +46,117 @@ CREATE TABLE IF NOT EXISTS location_translations (
     ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS items (
+CREATE TABLE IF NOT EXISTS catalogs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   slug VARCHAR(191) NOT NULL,
   name VARCHAR(191) NOT NULL,
-  category VARCHAR(191) NULL,
   description TEXT NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uniq_items_slug (slug)
+  UNIQUE KEY uniq_catalogs_slug (slug)
 );
 
-CREATE TABLE IF NOT EXISTS item_aliases (
+CREATE TABLE IF NOT EXISTS catalog_aliases (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  item_id BIGINT UNSIGNED NOT NULL,
+  catalog_id BIGINT UNSIGNED NOT NULL,
   alias VARCHAR(191) NOT NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uniq_item_alias (item_id, alias),
-  CONSTRAINT fk_item_aliases_item
-    FOREIGN KEY (item_id) REFERENCES items(id)
+  UNIQUE KEY uniq_catalog_alias (catalog_id, alias),
+  CONSTRAINT fk_catalog_aliases_catalog
+    FOREIGN KEY (catalog_id) REFERENCES catalogs(id)
     ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS item_translations (
+CREATE TABLE IF NOT EXISTS catalog_translations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  item_id BIGINT UNSIGNED NOT NULL,
+  catalog_id BIGINT UNSIGNED NOT NULL,
   language_code VARCHAR(10) NOT NULL,
   name VARCHAR(191) NULL,
-  category VARCHAR(191) NULL,
   description TEXT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uniq_item_translation (item_id, language_code),
-  CONSTRAINT fk_item_translations_item
-    FOREIGN KEY (item_id) REFERENCES items(id)
+  UNIQUE KEY uniq_catalog_translation (catalog_id, language_code),
+  CONSTRAINT fk_catalog_translations_catalog
+    FOREIGN KEY (catalog_id) REFERENCES catalogs(id)
     ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS location_items (
+CREATE TABLE IF NOT EXISTS catalog_locations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  catalog_id BIGINT UNSIGNED NOT NULL,
   location_id BIGINT UNSIGNED NOT NULL,
-  item_id BIGINT UNSIGNED NOT NULL,
   priority INT NOT NULL DEFAULT 100,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   notes VARCHAR(255) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uniq_location_item (location_id, item_id),
-  KEY idx_location_items_item (item_id),
-  CONSTRAINT fk_location_items_location
-    FOREIGN KEY (location_id) REFERENCES locations(id)
+  UNIQUE KEY uniq_catalog_location (catalog_id, location_id),
+  KEY idx_catalog_locations_location (location_id),
+  CONSTRAINT fk_catalog_locations_catalog
+    FOREIGN KEY (catalog_id) REFERENCES catalogs(id)
     ON DELETE CASCADE,
-  CONSTRAINT fk_location_items_item
-    FOREIGN KEY (item_id) REFERENCES items(id)
+  CONSTRAINT fk_catalog_locations_location
+    FOREIGN KEY (location_id) REFERENCES locations(id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS products (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(191) NOT NULL,
+  name VARCHAR(191) NOT NULL,
+  description TEXT NULL,
+  image_url VARCHAR(1000) NULL,
+  price DECIMAL(10,2) NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'EUR',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_products_slug (slug)
+);
+
+CREATE TABLE IF NOT EXISTS product_aliases (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  product_id BIGINT UNSIGNED NOT NULL,
+  alias VARCHAR(191) NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_product_alias (product_id, alias),
+  CONSTRAINT fk_product_aliases_product
+    FOREIGN KEY (product_id) REFERENCES products(id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS product_translations (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  product_id BIGINT UNSIGNED NOT NULL,
+  language_code VARCHAR(10) NOT NULL,
+  name VARCHAR(191) NULL,
+  description TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_product_translation (product_id, language_code),
+  CONSTRAINT fk_product_translations_product
+    FOREIGN KEY (product_id) REFERENCES products(id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS catalog_products (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  catalog_id BIGINT UNSIGNED NOT NULL,
+  product_id BIGINT UNSIGNED NOT NULL,
+  priority INT NOT NULL DEFAULT 100,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_catalog_product (catalog_id, product_id),
+  KEY idx_catalog_products_product (product_id),
+  CONSTRAINT fk_catalog_products_catalog
+    FOREIGN KEY (catalog_id) REFERENCES catalogs(id)
+    ON DELETE CASCADE,
+  CONSTRAINT fk_catalog_products_product
+    FOREIGN KEY (product_id) REFERENCES products(id)
     ON DELETE CASCADE
 );
 
