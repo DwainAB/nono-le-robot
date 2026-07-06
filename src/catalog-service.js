@@ -140,6 +140,7 @@ function mapProductRow(row) {
     description: row.description,
     imageUrl: row.image_url,
     isActive: Boolean(row.is_active),
+    isNew: Boolean(row.is_new),
     labels: {},
     aliases: [],
     catalogs: [],
@@ -321,6 +322,33 @@ export async function listCatalogs() {
 export async function listProducts() {
   const snapshot = await fetchCatalogFullSnapshot();
   return snapshot.products;
+}
+
+export async function listNewProducts() {
+  const snapshot = await fetchCatalogFullSnapshot();
+
+  return snapshot.products
+    .filter((product) => product.isNew)
+    .map((product) => {
+      const bestCatalog = product.catalogs
+        .map((catalogRef) => snapshot.catalogs.find((catalog) => catalog.id === catalogRef.id))
+        .filter(Boolean)
+        .sort((left, right) => (left.products.find((p) => p.id === product.id)?.priority || 0) - (right.products.find((p) => p.id === product.id)?.priority || 0))[0] || null;
+      const location = bestCatalog ? chooseBestCatalogLocation(bestCatalog) : null;
+
+      return {
+        ...product,
+        catalogId: bestCatalog ? bestCatalog.id : null,
+        catalogName: bestCatalog ? bestCatalog.name : null,
+        location: location
+          ? {
+              id: location.id,
+              name: location.name,
+              robotCanNavigate: location.robotCanNavigate
+            }
+          : null
+      };
+    });
 }
 
 function chooseBestCatalogLocation(catalog) {
@@ -611,6 +639,7 @@ async function upsertProductRecord(pool, productInput) {
   const slug = String(productInput.slug || slugify(name)).trim();
   const description = productInput.description ? String(productInput.description).trim() : null;
   const imageUrl = productInput.imageUrl ? String(productInput.imageUrl).trim() : null;
+  const isNew = toBoolean(productInput.isNew, false);
   const aliases = deduplicateStrings(Array.isArray(productInput.aliases) ? productInput.aliases : []);
   const translations = cleanTranslationsMap(productInput.translations, (value) => ({
     name: cleanNullableText(value.name),
@@ -632,16 +661,16 @@ async function upsertProductRecord(pool, productInput) {
   if (existingRows.length) {
     await pool.query(
       `UPDATE products
-       SET slug = ?, name = ?, description = ?, image_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+       SET slug = ?, name = ?, description = ?, image_url = ?, is_active = 1, is_new = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [slug, name, description, imageUrl, existingRows[0].id]
+      [slug, name, description, imageUrl, isNew ? 1 : 0, existingRows[0].id]
     );
     productId = Number(existingRows[0].id);
   } else {
     const [insertResult] = await pool.query(
-      `INSERT INTO products (slug, name, description, image_url)
-       VALUES (?, ?, ?, ?)`,
-      [slug, name, description, imageUrl]
+      `INSERT INTO products (slug, name, description, image_url, is_new)
+       VALUES (?, ?, ?, ?, ?)`,
+      [slug, name, description, imageUrl, isNew ? 1 : 0]
     );
     productId = Number(insertResult.insertId);
   }

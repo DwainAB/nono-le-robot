@@ -14,6 +14,7 @@ import {
 } from "./store-map.js";
 import {
   listCatalogs,
+  listNewProducts,
   listProducts,
   replaceCatalogLocations,
   replaceCatalogProducts,
@@ -137,6 +138,13 @@ const server = createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/api/products") {
     sendJson(response, 200, {
       products: await listProducts()
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/products/new") {
+    sendJson(response, 200, {
+      products: await listNewProducts()
     });
     return;
   }
