@@ -295,6 +295,7 @@ function buildProductSearchDocument(product) {
     product.description,
     ...(product.aliases || []),
     ...(product.catalogs || []).map((catalog) => catalog.name),
+    ...(product.variants || []).map((variant) => variant.label),
     ...Object.values(product.labels || {}).flatMap((label) => [label?.name, label?.description])
   ]
     .filter(Boolean)
@@ -440,11 +441,14 @@ export async function resolveCatalogMatch({
     slug: product.slug || null,
     name: product.name || null,
     description: product.description || null,
-    price: product.price ?? null,
-    currency: product.currency || null,
     imageUrl: product.imageUrl || null,
     aliases: Array.isArray(product.aliases) ? product.aliases : [],
     catalogs: (product.catalogs || []).map((catalog) => catalog.name).filter(Boolean),
+    variants: (product.variants || []).map((variant) => ({
+      label: variant.label,
+      price: variant.price,
+      currency: variant.currency
+    })),
     labels: product.labels || {}
   }));
 
@@ -488,7 +492,8 @@ export async function resolveCatalogMatch({
       ...product.aliases,
       ...Object.values(product.labels || {}).flatMap((label) => [label?.name, label?.description])
     ].filter(Boolean),
-    searchableContext: [product.description, ...product.catalogs].filter(Boolean)
+    searchableContext: [product.description, ...product.catalogs].filter(Boolean),
+    availableVariants: product.variants.map((variant) => variant.label)
   }));
 
   const systemPrompt = [
@@ -498,7 +503,10 @@ export async function resolveCatalogMatch({
     "Tu dois raisonner sur le sens, pas sur des mots exacts.",
     "Tu dois choisir uniquement parmi les candidats fournis.",
     "Tu ne dois jamais inventer un identifiant, un lieu, un produit ou une information qui n'existe pas dans le catalogue fourni.",
-    "Si la demande vise un produit precis vendu en boutique (sac, chaussure, article...), retourne l'identifiant canonique de ce produit avec type product.",
+    "Si la demande vise un produit precis vendu en boutique (sac, chaussure, article, parfum...), retourne l'identifiant canonique de ce produit avec type product.",
+    "Chaque produit peut avoir plusieurs variantes (par exemple des contenances differentes comme 100ml, 200ml, 500ml), chacune avec son propre prix.",
+    "Si la demande du client precise une variante particuliere (par exemple elle mentionne une contenance, une taille ou un format precis, ou demande le prix d'une variante specifique), tu dois identifier exactement quelle variante parmi availableVariants correspond et la renvoyer dans variantLabel en recopiant exactement son libelle tel qu'il apparait dans le catalogue.",
+    "Si la demande ne precise aucune variante particuliere, laisse variantLabel a null: le backend presentera alors toutes les variantes disponibles.",
     "Si la demande vise un rayon, un service ou un lieu general (sans viser un produit precis), retourne l'identifiant canonique de ce lieu avec type location.",
     "Si la demande correspond a une information generale du magasin, retourne l'identifiant canonique de cette information avec type store_info.",
     "Les equivalences de sens, les abreviations, les formulations polies, les fautes, les variantes de langues et les traductions implicites doivent etre comprises.",
@@ -508,7 +516,7 @@ export async function resolveCatalogMatch({
     "Si la demande semble viser un lieu, un produit, un service ou une information du magasin mais qu'aucune correspondance fiable n'existe, retourne type none.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|product|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"location|store_info|product|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"reason\":\"courte explication\"}"
   ].join(" ");
 
   const userPrompt = JSON.stringify(
@@ -568,11 +576,17 @@ export async function resolveCatalogMatch({
                   { type: "null" }
                 ]
               },
+              variantLabel: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
+                ]
+              },
               reason: {
                 type: "string"
               }
             },
-            required: ["type", "locationId", "storeInfoId", "productId", "reason"]
+            required: ["type", "locationId", "storeInfoId", "productId", "variantLabel", "reason"]
           }
         }
       }

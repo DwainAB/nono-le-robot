@@ -139,12 +139,21 @@ function mapProductRow(row) {
     name: row.name,
     description: row.description,
     imageUrl: row.image_url,
-    price: row.price === null || row.price === undefined ? null : Number(row.price),
-    currency: row.currency,
     isActive: Boolean(row.is_active),
     labels: {},
     aliases: [],
-    catalogs: []
+    catalogs: [],
+    variants: []
+  };
+}
+
+function mapVariantRow(row) {
+  return {
+    id: String(row.id),
+    label: row.label,
+    price: Number(row.price),
+    currency: row.currency,
+    priority: row.priority
   };
 }
 
@@ -180,6 +189,12 @@ async function fetchCatalogFullSnapshot() {
   );
   const [productAliasRows] = await pool.query(
     `SELECT product_id, alias FROM product_aliases WHERE is_active = 1`
+  );
+  const [productVariantRows] = await pool.query(
+    `SELECT id, product_id, label, price, currency, priority
+     FROM product_variants
+     WHERE is_active = 1
+     ORDER BY priority ASC, price ASC`
   );
   const [catalogTranslationRows] = await pool.query(
     `SELECT catalog_id, language_code, name, description FROM catalog_translations`
@@ -228,6 +243,11 @@ async function fetchCatalogFullSnapshot() {
   for (const row of productAliasRows) {
     const product = productsById.get(Number(row.product_id));
     if (product) product.aliases.push(row.alias);
+  }
+
+  for (const row of productVariantRows) {
+    const product = productsById.get(Number(row.product_id));
+    if (product) product.variants.push(mapVariantRow(row));
   }
 
   for (const row of catalogTranslationRows) {
@@ -367,6 +387,25 @@ export async function findProductFromMessage(message, { limit = 5 } = {}) {
     .slice(0, limit);
 }
 
+export function matchVariantFromMessage(message, variants) {
+  const normalizedMessage = normalize(message);
+  if (!normalizedMessage || !Array.isArray(variants) || !variants.length) {
+    return null;
+  }
+
+  let best = null;
+  let bestScore = 0;
+  for (const variant of variants) {
+    const score = scoreCandidate(normalizedMessage, variant.label);
+    if (score > bestScore) {
+      bestScore = score;
+      best = variant;
+    }
+  }
+
+  return best;
+}
+
 export async function findCatalogFromMessage(message) {
   const normalizedMessage = normalize(message);
   if (!normalizedMessage) {
@@ -405,6 +444,15 @@ export async function findCatalogFromMessage(message) {
   };
 }
 
+function formatVariantsForContext(variants) {
+  if (!variants || !variants.length) {
+    return "";
+  }
+  return variants
+    .map((variant) => `${variant.label}: ${variant.price} ${variant.currency}`)
+    .join(", ");
+}
+
 export async function buildCatalogContextText(language = "fr") {
   const snapshot = await fetchCatalogFullSnapshot();
   return snapshot.catalogs
@@ -413,7 +461,11 @@ export async function buildCatalogContextText(language = "fr") {
       const localizedDescription = catalog.labels?.[language]?.description || catalog.description;
       const locationNames = catalog.locations.map((location) => location.name).join(", ") || "lieu non renseigne";
       const productNames = catalog.products
-        .map((product) => product.labels?.[language]?.name || product.name)
+        .map((product) => {
+          const name = product.labels?.[language]?.name || product.name;
+          const variantsText = formatVariantsForContext(product.variants);
+          return variantsText ? `${name} (${variantsText})` : name;
+        })
         .join(", ");
 
       return `${localizedName}${localizedDescription ? ` (${localizedDescription})` : ""}: disponible a ${locationNames}.${
@@ -530,6 +582,26 @@ export async function replaceCatalogLocations(catalogId, locationLinks) {
   return listCatalogs();
 }
 
+function normalizeVariantsInput(variantsInput) {
+  const variants = Array.isArray(variantsInput) ? variantsInput : [];
+  return variants
+    .map((variant, index) => {
+      const label = String(variant?.label || "").trim() || "Standard";
+      const price = Number(variant?.price);
+      if (!Number.isFinite(price)) {
+        throw new Error("Prix de variante invalide");
+      }
+      const currency = String(variant?.currency || "EUR").trim().toUpperCase().slice(0, 3) || "EUR";
+      return {
+        label,
+        price,
+        currency,
+        priority: Number(variant?.priority || (index + 1) * 10)
+      };
+    })
+    .filter((variant) => variant.label);
+}
+
 async function upsertProductRecord(pool, productInput) {
   const name = String(productInput?.name || "").trim();
   if (!name) {
@@ -539,19 +611,15 @@ async function upsertProductRecord(pool, productInput) {
   const slug = String(productInput.slug || slugify(name)).trim();
   const description = productInput.description ? String(productInput.description).trim() : null;
   const imageUrl = productInput.imageUrl ? String(productInput.imageUrl).trim() : null;
-  const price =
-    productInput.price === undefined || productInput.price === null || productInput.price === ""
-      ? null
-      : Number(productInput.price);
-  const currency = String(productInput.currency || "EUR").trim().toUpperCase().slice(0, 3) || "EUR";
   const aliases = deduplicateStrings(Array.isArray(productInput.aliases) ? productInput.aliases : []);
   const translations = cleanTranslationsMap(productInput.translations, (value) => ({
     name: cleanNullableText(value.name),
     description: cleanNullableText(value.description)
   }));
+  const variants = normalizeVariantsInput(productInput.variants);
 
-  if (price !== null && !Number.isFinite(price)) {
-    throw new Error("Prix invalide");
+  if (!variants.length) {
+    throw new Error("Le produit doit avoir au moins une variante avec un prix");
   }
 
   const [existingRows] = await pool.query(
@@ -564,16 +632,16 @@ async function upsertProductRecord(pool, productInput) {
   if (existingRows.length) {
     await pool.query(
       `UPDATE products
-       SET slug = ?, name = ?, description = ?, image_url = ?, price = ?, currency = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+       SET slug = ?, name = ?, description = ?, image_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
-      [slug, name, description, imageUrl, price, currency, existingRows[0].id]
+      [slug, name, description, imageUrl, existingRows[0].id]
     );
     productId = Number(existingRows[0].id);
   } else {
     const [insertResult] = await pool.query(
-      `INSERT INTO products (slug, name, description, image_url, price, currency)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [slug, name, description, imageUrl, price, currency]
+      `INSERT INTO products (slug, name, description, image_url)
+       VALUES (?, ?, ?, ?)`,
+      [slug, name, description, imageUrl]
     );
     productId = Number(insertResult.insertId);
   }
@@ -591,6 +659,15 @@ async function upsertProductRecord(pool, productInput) {
     );
   }
 
+  await pool.query("DELETE FROM product_variants WHERE product_id = ?", [productId]);
+  for (const variant of variants) {
+    await pool.query(
+      `INSERT INTO product_variants (product_id, label, price, currency, priority)
+       VALUES (?, ?, ?, ?, ?)`,
+      [productId, variant.label, variant.price, variant.currency, variant.priority]
+    );
+  }
+
   return productId;
 }
 
@@ -602,7 +679,13 @@ export async function upsertProduct(productInput) {
   const pool = await getDbPool();
   const productId = await upsertProductRecord(pool, productInput);
   const [rows] = await pool.query("SELECT * FROM products WHERE id = ? LIMIT 1", [productId]);
-  return mapProductRow(rows[0]);
+  const [variantRows] = await pool.query(
+    "SELECT id, product_id, label, price, currency, priority FROM product_variants WHERE product_id = ? AND is_active = 1 ORDER BY priority ASC, price ASC",
+    [productId]
+  );
+  const product = mapProductRow(rows[0]);
+  product.variants = variantRows.map(mapVariantRow);
+  return product;
 }
 
 export async function replaceCatalogProducts(catalogId, products) {

@@ -8,7 +8,13 @@ import {
   listKnownLocations,
   listStoreInformation
 } from "./store-map.js";
-import { buildCatalogContextText, findProductFromMessage, listCatalogs, listProducts } from "./catalog-service.js";
+import {
+  buildCatalogContextText,
+  findProductFromMessage,
+  listCatalogs,
+  listProducts,
+  matchVariantFromMessage
+} from "./catalog-service.js";
 
 function normalize(value) {
   return String(value || "")
@@ -361,11 +367,54 @@ function pickBestCatalogForProduct(product) {
   return catalogs.slice().sort((left, right) => (left.priority || 0) - (right.priority || 0))[0] || null;
 }
 
-function buildProductReplyFallback({ product, location, language }) {
+function cheapestVariant(variants) {
+  return (variants || []).slice().sort((left, right) => left.price - right.price)[0] || null;
+}
+
+function buildVariantPriceText(product, selectedVariant, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const variants = product.variants || [];
+
+  if (selectedVariant) {
+    return `${selectedVariant.label} : ${formatPrice(selectedVariant.price, selectedVariant.currency, resolvedLanguage)}`;
+  }
+
+  if (variants.length === 1) {
+    return formatPrice(variants[0].price, variants[0].currency, resolvedLanguage);
+  }
+
+  if (variants.length > 1) {
+    const cheapest = cheapestVariant(variants);
+    const startingFromText = formatPrice(cheapest.price, cheapest.currency, resolvedLanguage);
+    const allVariantsText = variants
+      .map((variant) => `${variant.label} : ${formatPrice(variant.price, variant.currency, resolvedLanguage)}`)
+      .join(", ");
+
+    switch (resolvedLanguage) {
+      case "en":
+        return `from ${startingFromText} (${allVariantsText})`;
+      case "es":
+        return `desde ${startingFromText} (${allVariantsText})`;
+      case "ru":
+        return `от ${startingFromText} (${allVariantsText})`;
+      case "zh":
+        return `${startingFromText}起 (${allVariantsText})`;
+      case "ar":
+        return `ابتداءً من ${startingFromText} (${allVariantsText})`;
+      case "fr":
+      default:
+        return `a partir de ${startingFromText} (${allVariantsText})`;
+    }
+  }
+
+  return null;
+}
+
+function buildProductReplyFallback({ product, variant, location, language }) {
   const resolvedLanguage = normalizeLanguage(language);
   const name = product.labels?.[resolvedLanguage]?.name || product.name;
   const description = product.labels?.[resolvedLanguage]?.description || product.description;
-  const priceText = formatPrice(product.price, product.currency, resolvedLanguage);
+  const priceText = buildVariantPriceText(product, variant, resolvedLanguage);
   const locationName = location ? location.name : null;
 
   const parts = [name];
@@ -649,7 +698,8 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       const fullCatalog = allCatalogs.find((catalog) => catalog.id === bestCatalog?.id) || null;
       const location =
         fullCatalog?.locations?.slice().sort((left, right) => left.priority - right.priority)[0] || null;
-      matchedProduct = { product: aiResolvedProduct, location };
+      const variant = matchVariantFromMessage(aiResolution.variantLabel, aiResolvedProduct.variants);
+      matchedProduct = { product: aiResolvedProduct, variant, location };
     } else {
       aiResolution = { ...aiResolution, type: "none" };
     }
@@ -662,7 +712,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     if (!matchedLocation && !matchedStoreInformation.length) {
       const productMatches = await findProductFromMessage(trimmedMessage, { limit: 1 });
       if (productMatches.length) {
-        matchedProduct = { product: productMatches[0].product, location: productMatches[0].location };
+        const product = productMatches[0].product;
+        const variant = matchVariantFromMessage(trimmedMessage, product.variants);
+        matchedProduct = { product, variant, location: productMatches[0].location };
       }
     }
   }
@@ -715,6 +767,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
 
     reply = buildProductReplyFallback({
       product: matchedProduct.product,
+      variant: matchedProduct.variant,
       location: canNavigate ? location : null,
       language: resolvedLanguage
     });
@@ -727,8 +780,18 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
         description:
           matchedProduct.product.labels?.[resolvedLanguage]?.description || matchedProduct.product.description,
         imageUrl: matchedProduct.product.imageUrl,
-        price: matchedProduct.product.price,
-        currency: matchedProduct.product.currency
+        variants: (matchedProduct.product.variants || []).map((variant) => ({
+          label: variant.label,
+          price: variant.price,
+          currency: variant.currency
+        })),
+        selectedVariant: matchedProduct.variant
+          ? {
+              label: matchedProduct.variant.label,
+              price: matchedProduct.variant.price,
+              currency: matchedProduct.variant.currency
+            }
+          : null
       },
       navigate: canNavigate
         ? {
