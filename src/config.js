@@ -46,10 +46,8 @@ export const config = {
   dbSslRejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED || "true",
   dbSslCaPath: process.env.DB_SSL_CA_PATH || "",
   dbAutoMigrate: process.env.DB_AUTO_MIGRATE || "true",
-  storageEndpoint: process.env.STORAGE_ENDPOINT || "",
-  storageBucket: process.env.STORAGE_BUCKET || "",
-  storageAccessKeyId: process.env.STORAGE_ACCESS_KEY_ID || "",
-  storageSecretAccessKey: process.env.STORAGE_SECRET_ACCESS_KEY || "",
-  storageRegion: process.env.STORAGE_REGION || "auto",
-  storagePublicUrlBase: process.env.STORAGE_PUBLIC_URL_BASE || ""
+  cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || "",
+  cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || "",
+  cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || "",
+  cloudinaryFolder: process.env.CLOUDINARY_FOLDER || "products"
 };

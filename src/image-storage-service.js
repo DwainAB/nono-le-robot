@@ -1,48 +1,24 @@
-import crypto from "node:crypto";
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { v2 as cloudinary } from "cloudinary";
 import { config } from "./config.js";
 
-let s3ClientInstance = null;
+let configured = false;
 
 export function isImageStorageConfigured() {
-  return Boolean(
-    config.storageEndpoint && config.storageBucket && config.storageAccessKeyId && config.storageSecretAccessKey
-  );
+  return Boolean(config.cloudinaryCloudName && config.cloudinaryApiKey && config.cloudinaryApiSecret);
 }
 
-function getS3Client() {
-  if (!s3ClientInstance) {
-    s3ClientInstance = new S3Client({
-      endpoint: config.storageEndpoint,
-      region: config.storageRegion || "auto",
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: config.storageAccessKeyId,
-        secretAccessKey: config.storageSecretAccessKey
-      }
-    });
+function ensureConfigured() {
+  if (configured) {
+    return;
   }
-  return s3ClientInstance;
-}
 
-function buildPublicUrl(key) {
-  const base = config.storagePublicUrlBase || `${config.storageEndpoint}/${config.storageBucket}`;
-  return `${base.replace(/\/+$/, "")}/${key}`;
-}
-
-function extensionFromMimeType(mimeType) {
-  switch (mimeType) {
-    case "image/png":
-      return "png";
-    case "image/webp":
-      return "webp";
-    case "image/gif":
-      return "gif";
-    case "image/jpeg":
-    case "image/jpg":
-    default:
-      return "jpg";
-  }
+  cloudinary.config({
+    cloud_name: config.cloudinaryCloudName,
+    api_key: config.cloudinaryApiKey,
+    api_secret: config.cloudinaryApiSecret,
+    secure: true
+  });
+  configured = true;
 }
 
 export async function uploadProductImage({ buffer, mimeType }) {
@@ -54,36 +30,41 @@ export async function uploadProductImage({ buffer, mimeType }) {
     throw new Error("Fichier image vide");
   }
 
-  const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
-  const resolvedMimeType = allowedMimeTypes.has(mimeType) ? mimeType : "image/jpeg";
-  const key = `products/${Date.now()}-${crypto.randomUUID()}.${extensionFromMimeType(resolvedMimeType)}`;
+  ensureConfigured();
 
-  const client = getS3Client();
-  await client.send(
-    new PutObjectCommand({
-      Bucket: config.storageBucket,
-      Key: key,
-      Body: buffer,
-      ContentType: resolvedMimeType
-    })
-  );
+  const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
+  if (mimeType && !allowedMimeTypes.has(mimeType)) {
+    throw new Error("Format d'image non supporte");
+  }
+
+  const result = await new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: config.cloudinaryFolder,
+        resource_type: "image"
+      },
+      (error, uploadResult) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(uploadResult);
+      }
+    );
+    uploadStream.end(buffer);
+  });
 
   return {
-    key,
-    url: buildPublicUrl(key)
+    key: result.public_id,
+    url: result.secure_url
   };
 }
 
-export async function deleteProductImage(key) {
-  if (!isImageStorageConfigured() || !key) {
+export async function deleteProductImage(publicId) {
+  if (!isImageStorageConfigured() || !publicId) {
     return;
   }
 
-  const client = getS3Client();
-  await client.send(
-    new DeleteObjectCommand({
-      Bucket: config.storageBucket,
-      Key: key
-    })
-  );
+  ensureConfigured();
+  await cloudinary.uploader.destroy(publicId);
 }
