@@ -26,6 +26,15 @@ function normalize(value) {
     .trim();
 }
 
+// Vrai si le lieu cible est celui vers lequel un guidage vient deja d'etre propose/confirme
+// dans cette conversation (approximation en attendant un vrai suivi de position physique).
+function isAlreadyAtLocation(location, lastNavigatedLocationId) {
+  if (!location || !lastNavigatedLocationId) {
+    return false;
+  }
+  return String(location.id) === String(lastNavigatedLocationId);
+}
+
 const sessions = new Map();
 function createEmptySession() {
   return {
@@ -35,7 +44,12 @@ function createEmptySession() {
     // Cumule tous les ids de produits deja montres au client dans cette session (pas
     // seulement la derniere liste), pour que les relances (vous avez que ca ?, autre chose ?)
     // puissent avancer dans le catalogue sans jamais reproposer un produit deja vu.
-    allProposedProductIds: new Set()
+    allProposedProductIds: new Set(),
+    // Dernier lieu vers lequel un guidage a ete propose/confirme dans cette conversation.
+    // Approximation en attendant un vrai suivi de position physique du robot: si le client
+    // redemande un produit ou lieu situe au meme endroit juste apres, on evite de reproposer
+    // l'accompagnement puisque la conversation indique qu'on y va deja ou qu'on y est deja.
+    lastNavigatedLocationId: null
   };
 }
 
@@ -81,6 +95,14 @@ function updateLastProposedProducts(sessionId, products) {
     ...session,
     lastProposedProducts: products,
     allProposedProductIds
+  });
+}
+
+function updateLastNavigatedLocationId(sessionId, locationId) {
+  const session = sessions.get(sessionId) || createEmptySession();
+  sessions.set(sessionId, {
+    ...session,
+    lastNavigatedLocationId: locationId ? String(locationId) : null
   });
 }
 
@@ -218,7 +240,7 @@ function buildLocationReplyFallback(subject, place, resolvedLanguage, canNavigat
   }
 }
 
-async function buildLocationReplyText(match, language, canNavigate) {
+async function buildLocationReplyText(match, language, canNavigate, alreadyThere = false) {
   const resolvedLanguage = normalizeLanguage(language);
   const location = match.location;
   const subject =
@@ -232,13 +254,18 @@ async function buildLocationReplyText(match, language, canNavigate) {
       subject,
       place,
       language: resolvedLanguage,
-      canNavigate
+      canNavigate,
+      alreadyThere
     });
     if (reply) {
       return reply;
     }
   } catch {
     // fall through to the fixed template below
+  }
+
+  if (alreadyThere) {
+    return buildAlreadyAtLocationReply(match, resolvedLanguage);
   }
 
   return buildLocationReplyFallback(subject, place, resolvedLanguage, canNavigate);
@@ -250,6 +277,34 @@ function buildLocationReply(match, language) {
 
 function buildLocationOnlyReply(match, language) {
   return buildLocationReplyText(match, language, false);
+}
+
+function buildAlreadyThereReply(match, language) {
+  return buildLocationReplyText(match, language, false, true);
+}
+
+function buildAlreadyAtLocationReply(match, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const subject =
+    localizeItemName(match.item, resolvedLanguage) ||
+    match.itemName ||
+    localizeLocationName(match.location, resolvedLanguage);
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `You are already there, ${subject} is right here.`;
+    case "es":
+      return `Ya está aquí, ${subject} se encuentra justo en este lugar.`;
+    case "ru":
+      return `Вы уже здесь, ${subject} находится прямо тут.`;
+    case "zh":
+      return `您已经到了，${subject}就在这里。`;
+    case "ar":
+      return `أنت هنا بالفعل، ${subject} موجود في هذا المكان بالذات.`;
+    case "fr":
+    default:
+      return `Vous y êtes déjà, ${subject} se trouve juste ici.`;
+  }
 }
 
 function findLocationByAiResolution(allLocations, aiResolution) {
@@ -482,7 +537,15 @@ function buildVariantPriceText(product, selectedVariant, language) {
   return null;
 }
 
-function buildProductReplyFallback({ product, variant, location, language, wantsPrice, wantsDescription }) {
+function buildProductReplyFallback({
+  product,
+  variant,
+  location,
+  language,
+  wantsPrice,
+  wantsDescription,
+  alreadyThere
+}) {
   const resolvedLanguage = normalizeLanguage(language);
   const name = product.labels?.[resolvedLanguage]?.name || product.name;
   const description = product.labels?.[resolvedLanguage]?.description || product.description;
@@ -499,6 +562,24 @@ function buildProductReplyFallback({ product, variant, location, language, wants
 
   if (!locationName) {
     return intro;
+  }
+
+  if (alreadyThere) {
+    switch (resolvedLanguage) {
+      case "en":
+        return `${intro}. You are already at ${locationName}, it is right here.`;
+      case "es":
+        return `${intro}. Ya está en ${locationName}, se encuentra justo aquí.`;
+      case "ru":
+        return `${intro}. Вы уже в ${locationName}, это прямо здесь.`;
+      case "zh":
+        return `${intro}。您已经在${locationName}了，就在这里。`;
+      case "ar":
+        return `${intro}. أنت بالفعل في ${locationName}, إنه هنا بالضبط.`;
+      case "fr":
+      default:
+        return `${intro}. Vous êtes déjà à ${locationName}, c'est juste ici.`;
+    }
   }
 
   switch (resolvedLanguage) {
@@ -558,7 +639,7 @@ function buildNoMoreProductsReply(language) {
   }
 }
 
-function buildCatalogReplyText(catalog, location, language) {
+function buildCatalogReplyText(catalog, location, language, alreadyThere) {
   const resolvedLanguage = normalizeLanguage(language);
   const name = catalog.labels?.[resolvedLanguage]?.name || catalog.name;
   const locationName = location ? location.name : null;
@@ -578,6 +659,24 @@ function buildCatalogReplyText(catalog, location, language) {
       case "fr":
       default:
         return `Oui, nous avons une selection de ${name}.`;
+    }
+  }
+
+  if (alreadyThere) {
+    switch (resolvedLanguage) {
+      case "en":
+        return `Yes, we do. You are already at ${locationName}, our ${name} selection is right here.`;
+      case "es":
+        return `Sí, claro. Ya está en ${locationName}, nuestra selección de ${name} está justo aquí.`;
+      case "ru":
+        return `Да, конечно. Вы уже в ${locationName}, подборка ${name} прямо здесь.`;
+      case "zh":
+        return `当然有。您已经在${locationName}了，我们的${name}系列就在这里。`;
+      case "ar":
+        return `بالتأكيد. أنت بالفعل في ${locationName}, تشكيلة ${name} هنا بالضبط.`;
+      case "fr":
+      default:
+        return `Bien sur, nous en avons. Vous êtes déjà à ${locationName}, c'est juste ici.`;
     }
   }
 
@@ -1115,7 +1214,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       .map((candidate) => normalize(String(candidate || "")))
       .filter(Boolean);
 
+    const alreadyThere = isAlreadyAtLocation(matchedLocation.location, session.session.lastNavigatedLocationId);
     const canNavigate =
+      !alreadyThere &&
       matchedLocation.location.robotCanNavigate &&
       matchedLocation.location.isCurrentlyAvailable &&
       (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
@@ -1130,6 +1231,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           matchedLocation.location.slug ||
           matchedLocation.location.id
       };
+      updateLastNavigatedLocationId(session.sessionId, matchedLocation.location.id);
+    } else if (alreadyThere) {
+      reply = await buildAlreadyThereReply(matchedLocation, resolvedLanguage);
     } else {
       reply = await buildLocationOnlyReply(matchedLocation, resolvedLanguage);
     }
@@ -1141,7 +1245,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           .filter(Boolean)
       : [];
 
+    const productAlreadyThere = isAlreadyAtLocation(location, session.session.lastNavigatedLocationId);
     const canNavigate =
+      !productAlreadyThere &&
       Boolean(location) &&
       location.robotCanNavigate &&
       location.isCurrentlyAvailable &&
@@ -1150,11 +1256,16 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     reply = buildProductReplyFallback({
       product: matchedProduct.product,
       variant: matchedProduct.variant,
-      location: canNavigate ? location : null,
+      location: canNavigate || productAlreadyThere ? location : null,
       language: resolvedLanguage,
       wantsPrice: matchedProduct.wantsPrice,
-      wantsDescription: matchedProduct.wantsDescription
+      wantsDescription: matchedProduct.wantsDescription,
+      alreadyThere: productAlreadyThere
     });
+
+    if (canNavigate) {
+      updateLastNavigatedLocationId(session.sessionId, location.id);
+    }
 
     action = {
       type: "product",
@@ -1214,13 +1325,20 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           .filter(Boolean)
       : [];
 
+    const catalogAlreadyThere = isAlreadyAtLocation(location, session.session.lastNavigatedLocationId);
     const canNavigate =
+      !catalogAlreadyThere &&
       Boolean(location) &&
       location.robotCanNavigate &&
       location.isCurrentlyAvailable &&
       (!navigableSet.size || locationNavigationCandidates.some((candidate) => navigableSet.has(candidate)));
 
-    reply = buildCatalogReplyText(matchedCatalog.catalog, canNavigate ? location : null, resolvedLanguage);
+    reply = buildCatalogReplyText(
+      matchedCatalog.catalog,
+      canNavigate || catalogAlreadyThere ? location : null,
+      resolvedLanguage,
+      catalogAlreadyThere
+    );
 
     action = canNavigate
       ? {
@@ -1229,6 +1347,10 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           locationId: location.externalRobotId || location.slug || location.id
         }
       : null;
+
+    if (canNavigate) {
+      updateLastNavigatedLocationId(session.sessionId, location.id);
+    }
   } else if (clarifyingQuestion) {
     reply = clarifyingQuestion;
   } else if (matchedStoreInformation.length) {

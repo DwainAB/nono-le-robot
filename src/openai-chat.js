@@ -131,7 +131,8 @@ export async function createLocationReply({
   subject,
   place,
   language,
-  canNavigate
+  canNavigate,
+  alreadyThere
 }) {
   const targetLanguage = language || "fr";
 
@@ -150,10 +151,13 @@ export async function createLocationReply({
     "Tu ne recopies jamais le nom brut tel quel s'il n'est pas naturel a l'oral: utilise plutot une formulation courante et polie.",
     "Par exemple wc devient les toilettes, salle 2 devient la salle numero 2.",
     "Tu n'inventes jamais d'information qui n'est pas fournie.",
-    canNavigate
-      ? "Termine ta reponse par une proposition simple d'accompagnement du type: Souhaitez-vous que je vous y emmene ?"
-      : "Ne propose pas d'accompagnement, donne seulement l'information.",
-    "Exemple attendu: Les toilettes se trouvent au fond du couloir, a cote du bar. Souhaitez-vous que je vous y emmene ?"
+    alreadyThere
+      ? "Le robot se trouve deja a cet endroit avec le client: indique-le clairement (par exemple vous y etes deja, c'est juste ici) et ne propose surtout pas de l'y emmener."
+      : canNavigate
+        ? "Termine ta reponse par une proposition simple d'accompagnement du type: Souhaitez-vous que je vous y emmene ?"
+        : "Ne propose pas d'accompagnement, donne seulement l'information.",
+    "Exemple attendu: Les toilettes se trouvent au fond du couloir, a cote du bar. Souhaitez-vous que je vous y emmene ?",
+    "Exemple attendu si deja sur place: Vous y etes deja, les toilettes sont juste ici."
   ].join(" ");
 
   const userPayload = JSON.stringify({
