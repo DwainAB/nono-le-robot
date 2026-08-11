@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createAssistantReply, createLocationReply, resolveCatalogMatch } from "./openai-chat.js";
+import { createAssistantReply, createCatalogInfoReply, createLocationReply, resolveCatalogMatch } from "./openai-chat.js";
 import {
   buildLocationContextText,
   buildStoreInformationContextText,
@@ -27,14 +27,22 @@ function normalize(value) {
 }
 
 const sessions = new Map();
+function createEmptySession() {
+  return {
+    history: [],
+    firstName: null,
+    lastProposedProducts: [],
+    // Cumule tous les ids de produits deja montres au client dans cette session (pas
+    // seulement la derniere liste), pour que les relances (vous avez que ca ?, autre chose ?)
+    // puissent avancer dans le catalogue sans jamais reproposer un produit deja vu.
+    allProposedProductIds: new Set()
+  };
+}
+
 function getSession(sessionId) {
   const resolvedSessionId = sessionId || crypto.randomUUID();
   if (!sessions.has(resolvedSessionId)) {
-    sessions.set(resolvedSessionId, {
-      history: [],
-      firstName: null,
-      lastProposedProducts: []
-    });
+    sessions.set(resolvedSessionId, createEmptySession());
   }
   return {
     sessionId: resolvedSessionId,
@@ -43,7 +51,7 @@ function getSession(sessionId) {
 }
 
 function pushHistory(sessionId, role, content) {
-  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
+  const session = sessions.get(sessionId) || createEmptySession();
   const history = session.history || [];
   history.push({ role, content });
   if (history.length > 20) {
@@ -56,7 +64,7 @@ function pushHistory(sessionId, role, content) {
 }
 
 function updateFirstName(sessionId, firstName) {
-  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
+  const session = sessions.get(sessionId) || createEmptySession();
   sessions.set(sessionId, {
     ...session,
     firstName
@@ -64,10 +72,15 @@ function updateFirstName(sessionId, firstName) {
 }
 
 function updateLastProposedProducts(sessionId, products) {
-  const session = sessions.get(sessionId) || { history: [], firstName: null, lastProposedProducts: [] };
+  const session = sessions.get(sessionId) || createEmptySession();
+  const allProposedProductIds = new Set(session.allProposedProductIds || []);
+  for (const product of products || []) {
+    allProposedProductIds.add(String(product.id));
+  }
   sessions.set(sessionId, {
     ...session,
-    lastProposedProducts: products
+    lastProposedProducts: products,
+    allProposedProductIds
   });
 }
 
@@ -88,33 +101,6 @@ function formatFirstName(value) {
       return part;
     })
     .join(" ");
-}
-
-function extractFirstName(message) {
-  const normalized = String(message || "").trim();
-  if (!normalized) return null;
-
-  const directPatterns = [
-    /(?:je m'appelle|moi c'est|mon prenom est|mon prénom est)\s+([a-zA-ZÀ-ÿ' -]+)/i,
-    /(?:i am|my name is|i'm)\s+([a-zA-ZÀ-ÿ' -]+)/i,
-    /(?:me llamo|mi nombre es|soy)\s+([a-zA-ZÀ-ÿ' -]+)/i,
-    /(?:меня зовут|я)\s+([а-яёА-ЯЁ' -]+)/i,
-    /(?:我叫|我的名字是)\s*([^\s,.!?，。！？]{1,20})/i,
-    /(?:اسمي|انا|أنا)\s+([^\s,.!?،]{1,20})/i
-  ];
-
-  for (const pattern of directPatterns) {
-    const match = normalized.match(pattern);
-    if (match?.[1]) {
-      return formatFirstName(match[1].split(/\s+/)[0]);
-    }
-  }
-
-  if (/^[\p{L}' -]{2,40}$/u.test(normalized) && normalized.split(/\s+/).length <= 2) {
-    return formatFirstName(normalized.split(/\s+/)[0]);
-  }
-
-  return null;
 }
 
 function normalizeLanguage(language) {
@@ -554,6 +540,24 @@ function buildProductListReply(products, language) {
   }
 }
 
+function buildNoMoreProductsReply(language) {
+  switch (normalizeLanguage(language)) {
+    case "en":
+      return "Yes, that's everything we have in this category for now.";
+    case "es":
+      return "Sí, eso es todo lo que tenemos en esta categoría por el momento.";
+    case "ru":
+      return "Да, это всё, что у нас есть в этой категории на данный момент.";
+    case "zh":
+      return "是的，这就是我们目前在这个类别中的全部产品。";
+    case "ar":
+      return "نعم، هذا كل ما لدينا في هذه الفئة حاليًا.";
+    case "fr":
+    default:
+      return "Oui, c'est tout ce que nous avons dans cette categorie pour le moment.";
+  }
+}
+
 function buildCatalogReplyText(catalog, location, language) {
   const resolvedLanguage = normalizeLanguage(language);
   const name = catalog.labels?.[resolvedLanguage]?.name || catalog.name;
@@ -594,6 +598,62 @@ function buildCatalogReplyText(catalog, location, language) {
   }
 }
 
+// Reponse a une question sur la nature d'un catalogue (qu'est-ce que le Haircare ?), reformulee
+// a l'oral par l'IA a partir de la description reelle en base. Ne propose jamais de guidage:
+// ce n'est pas ce qui est demande. Repli sur un texte fixe si l'IA echoue ou n'est pas configuree.
+async function buildCatalogInfoReplyText(catalog, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const name = catalog.labels?.[resolvedLanguage]?.name || catalog.name;
+  const description = catalog.labels?.[resolvedLanguage]?.description || catalog.description;
+
+  try {
+    const reply = await createCatalogInfoReply({ name, description, language: resolvedLanguage });
+    if (reply) {
+      return reply;
+    }
+  } catch {
+    // fall through to the fixed template below
+  }
+
+  return buildCatalogInfoReplyFallback(name, description, resolvedLanguage);
+}
+
+function buildCatalogInfoReplyFallback(name, description, resolvedLanguage) {
+  if (!description) {
+    switch (resolvedLanguage) {
+      case "en":
+        return `${name} is one of our product categories.`;
+      case "es":
+        return `${name} es una de nuestras categorías de productos.`;
+      case "ru":
+        return `${name} — это одна из наших категорий товаров.`;
+      case "zh":
+        return `${name}是我们的产品类别之一。`;
+      case "ar":
+        return `${name} هي إحدى فئات منتجاتنا.`;
+      case "fr":
+      default:
+        return `${name} est l'une de nos categories de produits.`;
+    }
+  }
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `${name}: ${description}`;
+    case "es":
+      return `${name}: ${description}`;
+    case "ru":
+      return `${name}: ${description}`;
+    case "zh":
+      return `${name}：${description}`;
+    case "ar":
+      return `${name}: ${description}`;
+    case "fr":
+    default:
+      return `${name} : ${description}`;
+  }
+}
+
 function buildClarifyingReplyFallback(language) {
   switch (normalizeLanguage(language)) {
     case "en":
@@ -609,6 +669,38 @@ function buildClarifyingReplyFallback(language) {
     case "fr":
     default:
       return "Pourriez-vous m'en dire un peu plus sur ce que vous recherchez ?";
+  }
+}
+
+// Construit la question de clarification a partir des NOMS REELS des catalogues resolus
+// (donc garantis presents en base), plutot que de laisser le modele rediger un texte libre
+// qui pourrait citer des categories inexistantes (ex: maroquinerie alors qu'il n'y en a pas).
+function buildClarifyingCatalogQuestion(catalogs, language) {
+  const resolvedLanguage = normalizeLanguage(language);
+  const names = (catalogs || [])
+    .map((catalog) => catalog.labels?.[resolvedLanguage]?.name || catalog.name)
+    .filter(Boolean);
+
+  if (!names.length) {
+    return buildClarifyingReplyFallback(resolvedLanguage);
+  }
+
+  const listText = names.join(", ");
+
+  switch (resolvedLanguage) {
+    case "en":
+      return `What type of product are you looking for? For example: ${listText}?`;
+    case "es":
+      return `¿Qué tipo de producto busca? Por ejemplo: ${listText}?`;
+    case "ru":
+      return `Какой товар вас интересует? Например: ${listText}?`;
+    case "zh":
+      return `您在找哪类产品？例如：${listText}？`;
+    case "ar":
+      return `ما نوع المنتج الذي تبحث عنه؟ على سبيل المثال: ${listText}؟`;
+    case "fr":
+    default:
+      return `Quel type de produit recherchez-vous ? Par exemple : ${listText} ?`;
   }
 }
 
@@ -822,8 +914,10 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
   let matchedProduct = null;
   let matchedProductList = null;
   let matchedCatalog = null;
+  let matchedCatalogInfo = null;
+  let noMoreProductsInCategory = false;
   let clarifyingQuestion = null;
-  const extractedFirstName = !session.session.firstName ? extractFirstName(trimmedMessage) : null;
+  const awaitingFirstName = !session.session.firstName;
   const resolvedLanguage = normalizeLanguage(language);
   const navigableSet = new Set(
     (Array.isArray(navigableLocationIds) ? navigableLocationIds : [])
@@ -861,9 +955,22 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
       products: allProducts,
       catalogs: allCatalogs,
       history,
-      lastProposedProducts: session.session.lastProposedProducts
+      lastProposedProducts: session.session.lastProposedProducts,
+      awaitingFirstName
     });
   } catch {
+    aiResolution = null;
+  }
+
+  // Si le robot attendait le prenom du client et que le modele a identifie la reponse
+  // comme un prenom ou un nom de personne, on traite ce cas en priorite: on ne laisse
+  // jamais ce message etre interprete comme une demande de produit ou de lieu, meme s'il
+  // coincide semantiquement avec un element du catalogue (ex: "Marine" / parfum marin).
+  const resolvedFirstName =
+    awaitingFirstName && aiResolution?.type === "person_name" && aiResolution.personName
+      ? formatFirstName(aiResolution.personName)
+      : null;
+  if (resolvedFirstName) {
     aiResolution = null;
   }
 
@@ -919,6 +1026,28 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     if (!matchedProductList.length) {
       aiResolution = { ...aiResolution, type: "none" };
     }
+  } else if (aiResolution?.type === "product_list_more") {
+    // Le client relance apres une liste deja proposee (vous avez que ca ?, autre chose ?).
+    // On ne fait pas confiance a l'IA pour choisir les produits suivants (elle a tendance a
+    // reproposer la meme liste): on calcule nous-memes, en code, les produits restants de la
+    // meme categorie que ceux deja proposes, non deja montres au client.
+    const previouslyProposed = session.session.lastProposedProducts || [];
+    const allProposedProductIds = session.session.allProposedProductIds || new Set();
+    const sourceCatalogIds = new Set(
+      previouslyProposed.flatMap((product) => (product.catalogs || []).map((catalog) => String(catalog.id)))
+    );
+
+    const remainingProducts = allProducts.filter(
+      (product) =>
+        !allProposedProductIds.has(String(product.id)) &&
+        (product.catalogs || []).some((catalog) => sourceCatalogIds.has(String(catalog.id)))
+    );
+
+    if (remainingProducts.length) {
+      matchedProductList = remainingProducts.slice(0, 5);
+    } else {
+      noMoreProductsInCategory = true;
+    }
   } else if (aiResolution?.type === "catalog") {
     const aiResolvedCatalog = findCatalogByAiResolution(allCatalogs, aiResolution);
     if (aiResolvedCatalog) {
@@ -928,11 +1057,31 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     } else {
       aiResolution = { ...aiResolution, type: "none" };
     }
+  } else if (aiResolution?.type === "catalog_info") {
+    // Le client demande ce qu'est une categorie (qu'est-ce que le Haircare ?), pas a etre
+    // guide vers elle: on ne propose jamais d'accompagnement dans ce cas, seulement la
+    // description reelle du catalogue telle qu'enregistree en base.
+    const aiResolvedCatalogInfo = findCatalogByAiResolution(allCatalogs, {
+      type: "catalog",
+      catalogId: aiResolution.catalogId
+    });
+    if (aiResolvedCatalogInfo) {
+      matchedCatalogInfo = aiResolvedCatalogInfo;
+    } else {
+      aiResolution = { ...aiResolution, type: "none" };
+    }
   } else if (aiResolution?.type === "clarify") {
-    clarifyingQuestion = aiResolution.clarifyingQuestion || buildClarifyingReplyFallback(resolvedLanguage);
+    const requestedCatalogIds = Array.isArray(aiResolution.clarifyingCatalogIds)
+      ? aiResolution.clarifyingCatalogIds
+      : [];
+    const resolvedClarifyingCatalogs = requestedCatalogIds
+      .map((catalogId) => findCatalogByAiResolution(allCatalogs, { type: "catalog", catalogId }))
+      .filter(Boolean)
+      .slice(0, 5);
+    clarifyingQuestion = buildClarifyingCatalogQuestion(resolvedClarifyingCatalogs, resolvedLanguage);
   }
 
-  if (!matchedLocation && !matchedStoreInformation.length && !matchedProduct && !aiResolution) {
+  if (!resolvedFirstName && !matchedLocation && !matchedStoreInformation.length && !matchedProduct && !aiResolution) {
     matchedLocation = await findLocationFromMessage(trimmedMessage);
     matchedStoreInformation = await findStoreInformationFromMessage(trimmedMessage);
 
@@ -1035,6 +1184,8 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
           }
         : null
     };
+  } else if (noMoreProductsInCategory) {
+    reply = buildNoMoreProductsReply(resolvedLanguage);
   } else if (matchedProductList) {
     reply = buildProductListReply(matchedProductList, resolvedLanguage);
     updateLastProposedProducts(session.sessionId, matchedProductList);
@@ -1053,6 +1204,8 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
         }))
       }))
     };
+  } else if (matchedCatalogInfo) {
+    reply = await buildCatalogInfoReplyText(matchedCatalogInfo, resolvedLanguage);
   } else if (matchedCatalog) {
     const location = matchedCatalog.location;
     const locationNavigationCandidates = location
@@ -1080,9 +1233,9 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     reply = clarifyingQuestion;
   } else if (matchedStoreInformation.length) {
     reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
-  } else if (extractedFirstName) {
-    updateFirstName(session.sessionId, extractedFirstName || trimmedMessage);
-    reply = buildGreetingWithFirstName(extractedFirstName, resolvedLanguage);
+  } else if (resolvedFirstName) {
+    updateFirstName(session.sessionId, resolvedFirstName);
+    reply = buildGreetingWithFirstName(resolvedFirstName, resolvedLanguage);
   } else if (aiResolution?.type === "none") {
     reply = buildUnknownLocationReply(resolvedLanguage);
   } else {

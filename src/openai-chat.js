@@ -59,7 +59,8 @@ export async function createAssistantReply({ message, sessionId, language, histo
     "Tu reponds pour l'oral, avec des phrases courtes, claires et naturelles.",
     "Tu n'utilises ni markdown, ni listes, ni emojis.",
     `Tu reponds uniquement dans la langue demandee: ${targetLanguage}.`,
-    "Tu aides surtout a informer le client sur les produits, les rayons, les services, les horaires et les informations magasin fournies par le systeme.",
+    "Ton role premier est de guider physiquement le client vers ce qu'il cherche (produit, rayon, service), pas de lui recite des informations. Des qu'un lieu ou un produit demande est identifie et qu'un accompagnement est possible, ta priorite est de le proposer, pas de detailler des caracteristiques.",
+    "Tu ne donnes une information detaillee (description, caracteristiques, prix) que si le client la demande explicitement. Si le client demande seulement ou se trouve quelque chose, tu ne donnes que l'emplacement et la proposition de guidage, sans ajouter de details non demandes.",
     "Tu ne parles jamais de produits, tu ne cites aucun nom de produit et tu ne fais aucune suggestion ou recommandation de produit de ta propre initiative.",
     "Tu n'evoques un produit que si le client a explicitement demande un produit precis, une categorie de produits, ou une liste de produits disponibles.",
     "Si le message du client ne concerne pas un produit (salutation, question sur un lieu, un horaire, un service), tu ne mentionnes aucun produit meme si le contexte en contient.",
@@ -67,7 +68,7 @@ export async function createAssistantReply({ message, sessionId, language, histo
     "Si l'information n'existe pas dans le contexte, tu dis simplement que tu ne sais pas ou tu demandes une precision.",
     "Tu ne proposes d'accompagner le client que si un point robot disponible est explicitement fourni pour ce lieu.",
     "Si aucun point robot n'est disponible pour ce lieu, tu donnes seulement l'information sans proposer d'accompagnement.",
-    "Quand un point robot existe pour le lieu demande, tu peux terminer ta reponse par une proposition simple du type: Souhaitez-vous que je vous y emmene ?",
+    "Quand un point robot existe pour le lieu demande, tu proposes systematiquement de l'y emmener en terminant ta reponse par une proposition simple du type: Souhaitez-vous que je vous y emmene ?",
     "Tu ne mentionnes jamais de details techniques comme base de donnees, backoffice, action, point robot, identifiant ou systeme interne.",
     "Tu ne repetes pas inutilement le prenom du client.",
     "Quand le client pose une question simple, ta reponse doit rester breve.",
@@ -158,6 +159,57 @@ export async function createLocationReply({
   const userPayload = JSON.stringify({
     nomBrut: subject,
     emplacementBrut: place,
+    langue: targetLanguage
+  });
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.openAiApiKey}`
+    },
+    body: JSON.stringify({
+      model: config.openAiModel,
+      input: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPayload }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return extractOutputText(data);
+}
+
+export async function createCatalogInfoReply({ name, description, language }) {
+  const targetLanguage = language || "fr";
+
+  if (!config.openAiApiKey) {
+    return null;
+  }
+
+  const systemPrompt = [
+    "Tu es la voix d'un robot d'accueil installe dans une boutique de luxe.",
+    "Ton ton est poli, fluide, sobre, chaleureux et professionnel.",
+    "Tu reponds pour l'oral, avec une ou deux phrases courtes, claires et naturelles.",
+    "Tu n'utilises jamais de markdown, de puces, de listes a la ligne ni d'emojis: uniquement du texte courant, fluide, en phrases.",
+    `Tu reponds uniquement dans la langue demandee: ${targetLanguage}.`,
+    "On te donne le nom brut d'une categorie de produits issu d'une base de donnees, et sa description brute qui peut contenir une liste de sous-categories.",
+    "Tu dois reformuler cette description brute en une ou deux phrases naturelles qui expliquent au client ce que contient cette categorie, comme le ferait un vendeur a l'oral.",
+    "Tu peux citer quelques exemples marquants issus de la description pour illustrer, sans recopier la liste telle quelle ni en faire une enumeration exhaustive.",
+    "Tu n'inventes jamais d'information qui n'est pas fournie dans la description.",
+    "Tu ne proposes jamais d'accompagnement ou de guidage dans cette reponse: le client demande une explication, pas un emplacement.",
+    "Exemple attendu: Le Haircare regroupe tous nos soins pour les cheveux, des shampoings aux masques en passant par les huiles et les produits coiffants."
+  ].join(" ");
+
+  const userPayload = JSON.stringify({
+    nomBrut: name,
+    descriptionBrute: description,
     langue: targetLanguage
   });
 
@@ -425,7 +477,8 @@ export async function resolveCatalogMatch({
   products,
   catalogs,
   history,
-  lastProposedProducts
+  lastProposedProducts,
+  awaitingFirstName
 }) {
   if (!config.openAiApiKey) {
     return null;
@@ -605,8 +658,13 @@ export async function resolveCatalogMatch({
     "Tu ne dois jamais inventer un identifiant, un lieu, un produit, un catalogue ou une information qui n'existe pas dans le catalogue fourni.",
     "Tu ne dois jamais proposer de produit de ta propre initiative: un type product, product_list, product_detail_from_list ou catalog n'est legitime que si le client a lui-meme exprime une recherche ou une question a propos d'un produit ou d'une categorie de produits. Si le message ne concerne pas un produit, n'utilise jamais ces types meme si des produits pertinents existent dans le catalogue.",
     "Ne melange jamais des produits de categories differentes dans une meme reponse: si le client demande un type de produit precis (par exemple un parfum), tous les produits consideres ou proposes doivent appartenir a cette meme categorie, jamais a une autre (par exemple jamais de maquillage ou de soin quand un parfum est demande).",
+    "Principe general de priorite: le role premier du robot est de guider physiquement le client vers l'endroit ou se trouve ce qu'il cherche (produit, rayon, service), pas de lui donner des informations detaillees. Des qu'un produit, un rayon ou un catalogue est identifie, l'objectif par defaut est de permettre au robot de proposer de l'y emmener. Les informations complementaires (description, caracteristiques, prix) ne doivent etre fournies que si le client les demande explicitement: ne les considere jamais comme l'objectif principal de la reponse.",
     "",
     "Voici les types de reponse possibles et quand les utiliser:",
+    "",
+    awaitingFirstName
+      ? "- type person_name: LE ROBOT VIENT DE DEMANDER AU CLIENT COMMENT IL S'APPELLE et attend sa reponse. Si le message du client est ou contient un prenom ou un nom de personne plausible (par exemple une simple presentation comme Marine, ou une phrase comme je m'appelle Marine, moi c'est Paul, my name is John), utilise ce type et retourne ce prenom ou nom dans personName, avec la casse correcte (premiere lettre en majuscule). Priorise toujours cette interpretation par defaut pour un message court qui ressemble a un prenom ou un nom propre, meme s'il ressemble aussi phonetiquement ou semantiquement a un nom de produit, une marque ou un mot du catalogue: dans le doute entre un prenom et un produit pour un message de ce type, choisis person_name. N'utilise PAS ce type si le message est clairement une question, une demande de produit explicite, une demande de lieu, ou toute autre phrase qui n'est manifestement pas une reponse a la question du prenom (par exemple une phrase longue, une question, une negation comme non merci)."
+      : null,
     "",
     "- type product: la demande vise un produit precis et identifiable (le client connait deja le nom du produit, ou un seul produit correspond clairement). Retourne productId. Chaque produit peut avoir plusieurs variantes (par exemple des contenances differentes comme 100ml, 200ml, 500ml), chacune avec son propre prix. Si la demande precise une variante particuliere, identifie exactement quelle variante parmi availableVariants correspond et renvoie-la dans variantLabel en recopiant exactement son libelle. Sinon laisse variantLabel a null.",
     "",
@@ -614,13 +672,17 @@ export async function resolveCatalogMatch({
     "- wantsPrice: true uniquement si le message du client demande explicitement le prix, le tarif, le cout, ou combien ca coute. Sinon false. Ne mets jamais true par defaut: le prix ne doit pas etre donne spontanement si le client ne l'a pas demande.",
     "- wantsDescription: true si le client demande des details, plus d'informations, une description, ou pose une question sur les caracteristiques du produit (matiere, composition, notes olfactives, etc). Sinon false.",
     "",
-    "- type product_list: la demande vise EXPLICITEMENT plusieurs produits: le client demande une liste, plusieurs options, des alternatives, des produits similaires a un produit deja cite, ou pose une question avec un critere de filtrage clair (par exemple un parfum boise, un rouge a levres mat) SANS avoir precise vouloir un seul produit en particulier. Retourne productIds: une liste de 3 a 5 identifiants de produits parmi les plus pertinents, en te basant sur le nom et surtout la description de chaque produit pour juger de la pertinence du filtrage demande. Si moins de 3 produits pertinents existent, retourne uniquement ceux qui sont vraiment pertinents. IMPORTANT: tous les produits retournes doivent appartenir a la meme categorie/le meme type de produit que celui demande par le client (par exemple si le client demande des parfums, ne retourne jamais de maquillage ou de soin de la peau, meme si ces produits existent dans le catalogue). Si le client demande explicitement un seul produit ou le meilleur produit pour un besoin precis, n'utilise pas ce type: utilise type product avec un seul choix, ou type clarify si le choix n'est pas evident parmi les options.",
+    "- type product_list: la demande vise EXPLICITEMENT plusieurs produits. Deux cas declenchent ce type: (1) le client demande une liste, plusieurs options, des alternatives, des produits similaires a un produit deja cite, ou pose une question avec un critere de filtrage clair (par exemple un parfum boise, un rouge a levres mat); (2) le client demande explicitement de voir, connaitre, ou qu'on lui parle de tous les produits disponibles d'une categorie entiere, meme sans critere de filtrage (par exemple parle-moi des parfums disponibles, montre-moi vos parfums, quels parfums avez-vous, qu'est-ce que vous avez comme parfums): dans ce cas, le client ne demande pas d'aide pour choisir, il demande directement la liste, donc n'utilise JAMAIS type clarify pour ce cas precis. Retourne productIds: une liste de 3 a 5 identifiants de produits parmi les plus pertinents, en te basant sur le nom et surtout la description de chaque produit pour juger de la pertinence. Si moins de 3 produits pertinents existent, retourne uniquement ceux qui sont vraiment pertinents. IMPORTANT: tous les produits retournes doivent appartenir a la meme categorie/le meme type de produit que celui demande par le client (par exemple si le client demande des parfums, ne retourne jamais de maquillage ou de soin de la peau, meme si ces produits existent dans le catalogue). Si le client demande explicitement un seul produit ou le meilleur produit pour un besoin precis, n'utilise pas ce type: utilise type product avec un seul choix, ou type clarify si le choix n'est pas evident parmi les options.",
     "",
-    "- type clarify: la demande exprime une intention d'achat ou de recherche mais reste trop vague pour cibler un produit ou une liste pertinente (par exemple le client dit je cherche un parfum ou je recherche des parfums, sans aucun autre critere, et le catalogue contient plusieurs parfums varies). Retourne clarifyingQuestion: une courte question naturelle et polie pour affiner la recherche (par exemple demander le type de parfum recherche, fruite, boise, floral, etc, en te basant sur les descriptions des produits disponibles dans le catalogue pour proposer des pistes pertinentes). N'utilise ce type que si une clarification aiderait reellement a affiner un choix parmi plusieurs options.",
+    "- type product_list_more: le message precedent du robot (visible dans l'historique) a propose une liste de plusieurs produits (voir lastProposedProducts), et le client demande maintenant s'il y en a d'autres, si c'est tout ce qui existe, ou plus d'options dans la meme categorie (par exemple vous avez que ca, c'est tout, autre chose, vous n'avez rien d'autre, montre m'en d'autres). N'utilise ce type QUE dans ce contexte precis de relance apres une liste deja proposee. Ne retourne aucun productIds toi-meme pour ce type: le backend calculera lui-meme les produits suivants a proposer.",
+    "",
+    "- type clarify: la demande exprime seulement une intention d'achat ou de recherche generale, SANS preciser quelle categorie de produits interesse le client (par exemple je cherche un produit, je ne sais pas ce que je veux, j'ai besoin de quelque chose). N'utilise CE type QUE si le client n'a encore nomme aucune categorie de produits precise: des qu'une categorie est nommee ou clairement identifiable (par exemple parfum, maquillage, soin), n'utilise jamais type clarify, utilise plutot type product_list ou type catalog selon la demande. Tu ne dois JAMAIS rediger toi-meme le texte de la question de clarification (aucune categorie, aucun rayon, aucun type de produit ne doit etre invente en texte libre). A la place, retourne clarifyingCatalogIds: une liste de 2 a 5 identifiants de catalogues, choisis UNIQUEMENT parmi les ids presents dans catalog.catalogs fourni en contexte, qui representent les pistes les plus pertinentes pour aider le client a preciser sa recherche. Si aucun catalogue fourni n'est pertinent, retourne une liste vide.",
     "",
     "- type product_detail_from_list: le message precedent du robot (visible dans l'historique de conversation) a propose une liste de plusieurs produits, et le client demande maintenant plus d'informations sur l'un d'entre eux. Utilise lastProposedProducts pour identifier lequel des produits recemment proposes est vise, et retourne son identifiant dans productId. Le client peut designer le produit de deux facons: (1) par son nom ou une partie reconnaissable de son nom (par exemple le nom du produit ou un mot cle distinctif qui le composent), auquel cas tu compares avec le champ name de chaque element de lastProposedProducts; (2) par sa position d'affichage, en citant un numero ou un ordinal (le numero 1, le 1, le premier, le deuxieme, the second one, etc). IMPORTANT: chaque produit affiche a l'ecran du client porte un badge visible correspondant exactement au champ displayPosition de cet element dans lastProposedProducts (le produit avec displayPosition 1 affiche #1, celui avec displayPosition 2 affiche #2, etc). Un numero ou un ordinal cite par le client (le numero 1, le premier, etc) fait donc TOUJOURS reference au champ displayPosition, JAMAIS au champ id (le champ id est un identifiant interne non visible du client, qui peut etre completement different du numero affiche: par exemple le produit avec id 10 peut tres bien avoir displayPosition 1 et afficher le badge #1). Ne compare donc jamais un numero cite par le client au champ id: compare-le uniquement au champ displayPosition. Pour ce type, mets wantsDescription a true (le client demande explicitement plus d'informations). Ne mets wantsPrice a true que si le client demande aussi explicitement le prix.",
     "",
-    "- type catalog: la demande vise un type d'article ou de rayon general correspondant a un catalogue entier plutot qu'a un produit precis, ET le catalogue ne contient PAS plusieurs produits nettement differents parmi lesquels il faudrait choisir (par exemple avez-vous des portemonnaie, quand le catalogue Maroquinerie ne propose qu'un choix limite et homogene). Retourne l'identifiant canonique de ce catalogue dans catalogId. IMPORTANT: si le catalogue correspondant contient plusieurs produits clairement distincts (par exemple plusieurs parfums avec des noms et notes olfactives differentes), n'utilise JAMAIS type catalog pour une demande generique comme je cherche des parfums ou je voudrais un parfum: utilise plutot type clarify (si aucun critere n'est donne) ou type product_list (si un critere de filtrage est donne). Le type catalog ne doit jamais se substituer a la decouverte de produits: ne propose jamais de guider directement le client vers un rayon quand plusieurs produits differents pourraient l'interesser sans qu'il ait encore precise lequel.",
+    "- type catalog: la demande vise un type d'article ou de rayon general correspondant a un catalogue entier plutot qu'a un produit precis, ET le catalogue ne contient PAS plusieurs produits nettement differents parmi lesquels il faudrait choisir (le catalogue ne propose alors qu'un choix limite et homogene). Retourne l'identifiant canonique de ce catalogue dans catalogId: ce doit etre obligatoirement un id present parmi les catalogues fournis dans le contexte, jamais un catalogue invente. IMPORTANT: si le catalogue correspondant contient plusieurs produits clairement distincts (par exemple plusieurs parfums avec des noms et notes olfactives differentes), n'utilise JAMAIS type catalog pour une demande generique comme je cherche des parfums ou je voudrais un parfum: utilise plutot type clarify (si aucun critere n'est donne) ou type product_list (si un critere de filtrage est donne). Le type catalog ne doit jamais se substituer a la decouverte de produits: ne propose jamais de guider directement le client vers un rayon quand plusieurs produits differents pourraient l'interesser sans qu'il ait encore precise lequel. IMPORTANT: n'utilise type catalog QUE si la demande vise a trouver ou obtenir ce type de produit (je cherche, avez-vous, ou se trouve, je voudrais). Si la demande porte sur la nature ou la definition du catalogue lui-meme (par exemple qu'est-ce que X, c'est quoi X, ca sert a quoi), utilise le type catalog_info a la place, jamais type catalog.",
+    "",
+    "- type catalog_info: la demande porte sur la nature, la definition ou la description d'un catalogue ou d'une categorie de produits, sans chercher a etre guide vers cette categorie (par exemple qu'est-ce que le Haircare, c'est quoi le Skincare, ca comprend quoi). Retourne l'identifiant du catalogue concerne dans catalogId (obligatoirement un id present parmi les catalogues fournis). Ce type ne declenche jamais de proposition de guidage: le client demande une explication, pas un emplacement.",
     "",
     "- type location: la demande vise un rayon, un service ou un lieu general qui n'est ni un produit ni un catalogue de produits. Retourne locationId.",
     "",
@@ -635,7 +697,7 @@ export async function resolveCatalogMatch({
     "Si la demande est une question de localisation ou de recherche, ne retourne jamais type general.",
     "Reponds uniquement en JSON valide sans markdown.",
     "Format exact attendu:",
-    "{\"type\":\"location|store_info|product|product_list|clarify|product_detail_from_list|catalog|general|none\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"productIds\":[\"id\",\"...\"],\"catalogId\":\"id ou null\",\"variantLabel\":\"libelle exact de la variante ou null\",\"wantsPrice\":true|false,\"wantsDescription\":true|false,\"clarifyingQuestion\":\"question ou null\",\"reason\":\"courte explication\"}"
+    "{\"type\":\"person_name|location|store_info|product|product_list|product_list_more|clarify|product_detail_from_list|catalog|catalog_info|general|none\",\"personName\":\"prenom ou nom ou null\",\"locationId\":\"id ou null\",\"storeInfoId\":\"id ou null\",\"productId\":\"id ou null\",\"productIds\":[\"id\",\"...\"],\"catalogId\":\"id ou null\",\"clarifyingCatalogIds\":[\"id\",\"...\"],\"variantLabel\":\"libelle exact de la variante ou null\",\"wantsPrice\":true|false,\"wantsDescription\":true|false,\"reason\":\"courte explication\"}"
   ].join(" ");
 
   const userPrompt = JSON.stringify(
@@ -679,15 +741,24 @@ export async function resolveCatalogMatch({
               type: {
                 type: "string",
                 enum: [
+                  "person_name",
                   "location",
                   "store_info",
                   "product",
                   "product_list",
+                  "product_list_more",
                   "clarify",
                   "product_detail_from_list",
                   "catalog",
+                  "catalog_info",
                   "general",
                   "none"
+                ]
+              },
+              personName: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "null" }
                 ]
               },
               locationId: {
@@ -718,6 +789,10 @@ export async function resolveCatalogMatch({
                   { type: "null" }
                 ]
               },
+              clarifyingCatalogIds: {
+                type: "array",
+                items: { type: "string" }
+              },
               variantLabel: {
                 anyOf: [
                   { type: "string" },
@@ -730,27 +805,22 @@ export async function resolveCatalogMatch({
               wantsDescription: {
                 type: "boolean"
               },
-              clarifyingQuestion: {
-                anyOf: [
-                  { type: "string" },
-                  { type: "null" }
-                ]
-              },
               reason: {
                 type: "string"
               }
             },
             required: [
               "type",
+              "personName",
               "locationId",
               "storeInfoId",
               "productId",
               "productIds",
               "catalogId",
+              "clarifyingCatalogIds",
               "variantLabel",
               "wantsPrice",
               "wantsDescription",
-              "clarifyingQuestion",
               "reason"
             ]
           }
