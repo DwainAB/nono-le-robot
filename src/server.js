@@ -14,6 +14,7 @@ import {
   upsertStoreInformation
 } from "./store-map.js";
 import {
+  deleteCatalog,
   listCatalogs,
   listNewProducts,
   listProducts,
@@ -224,6 +225,19 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         catalog
       });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/catalogs/delete") {
+    try {
+      const body = await collectRequestBody(request);
+      const result = await deleteCatalog(body.id);
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 400, {
         error: error.message || "Erreur inconnue"

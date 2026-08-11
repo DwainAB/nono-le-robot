@@ -717,6 +717,51 @@ export async function upsertProduct(productInput) {
   return product;
 }
 
+export async function deleteCatalog(catalogId) {
+  if (!isDatabaseConfigured()) {
+    throw new Error("Base de donnees non configuree");
+  }
+
+  const numericCatalogId = Number(catalogId);
+  if (!numericCatalogId) {
+    throw new Error("catalogId invalide");
+  }
+
+  const pool = await getDbPool();
+
+  const [productRows] = await pool.query(
+    "SELECT product_id FROM catalog_products WHERE catalog_id = ?",
+    [numericCatalogId]
+  );
+  const productIds = productRows.map((row) => Number(row.product_id));
+
+  await pool.query("DELETE FROM catalog_aliases WHERE catalog_id = ?", [numericCatalogId]);
+  await pool.query("DELETE FROM catalog_translations WHERE catalog_id = ?", [numericCatalogId]);
+  await pool.query("DELETE FROM catalog_locations WHERE catalog_id = ?", [numericCatalogId]);
+  await pool.query("DELETE FROM catalog_products WHERE catalog_id = ?", [numericCatalogId]);
+
+  const [result] = await pool.query("DELETE FROM catalogs WHERE id = ?", [numericCatalogId]);
+  if (!result.affectedRows) {
+    throw new Error("Catalogue introuvable");
+  }
+
+  // Supprime les produits qui n'appartiennent plus à aucun autre catalogue.
+  for (const productId of productIds) {
+    const [remainingRows] = await pool.query(
+      "SELECT id FROM catalog_products WHERE product_id = ? LIMIT 1",
+      [productId]
+    );
+    if (remainingRows.length) continue;
+
+    await pool.query("DELETE FROM product_aliases WHERE product_id = ?", [productId]);
+    await pool.query("DELETE FROM product_translations WHERE product_id = ?", [productId]);
+    await pool.query("DELETE FROM product_variants WHERE product_id = ?", [productId]);
+    await pool.query("DELETE FROM products WHERE id = ?", [productId]);
+  }
+
+  return { id: numericCatalogId };
+}
+
 export async function replaceCatalogProducts(catalogId, products) {
   if (!isDatabaseConfigured()) {
     throw new Error("Base de donnees non configuree");
