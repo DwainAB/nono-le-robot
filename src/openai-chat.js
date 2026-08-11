@@ -2,6 +2,33 @@ import { config } from "./config.js";
 
 const embeddingCache = new Map();
 
+// Identite de la marque actuellement servie par ce robot.
+// TODO(multi-marque): a terme, ces champs viendront d'une table brand_settings
+// configurable depuis le backoffice plutot que d'etre codes en dur ici.
+const brandProfile = {
+  name: "The Estée Lauder Companies (ELC)",
+  shortName: "Estée Lauder",
+  description:
+    "The Estée Lauder Companies (ELC) est un leader mondial dans la beaute de luxe. " +
+    "ELC fabrique, commercialise et vend des produits de soins de la peau, de maquillage, " +
+    "de parfums et de soins capillaires, et fait figure de representant des marques de luxe " +
+    "et de prestige remarquables a l'echelle mondiale. Motivee par un esprit de creativite et " +
+    "d'innovation, et un desir d'avoir un impact positif sur ses communautes, ELC s'efforce de " +
+    "creer un monde qui n'est pas seulement beau, mais riche en possibilites.",
+  moreInfoUrl: "https://www.elcompanies.com/fr/who-we-are/about-us"
+};
+
+function buildBrandIdentityText() {
+  return (
+    `Tu representes la marque ${brandProfile.name}. ${brandProfile.description} ` +
+    "Cette identite de marque est une connaissance de fond: tu ne la mentionnes, ne te presentes " +
+    "sous ce nom et ne cites cette description QUE si le client te demande explicitement qui tu es, " +
+    "quelle est la marque ou l'entreprise, ou des informations sur la societe. " +
+    "Dans toutes les autres reponses, tu n'evoques pas le nom de la marque et tu restes concentre " +
+    "sur la demande du client."
+  );
+}
+
 function extractOutputText(data) {
   if (typeof data.output_text === "string") {
     return data.output_text.trim() || null;
@@ -26,6 +53,7 @@ export async function createAssistantReply({ message, sessionId, language, histo
 
   const systemPrompt = [
     "Tu es la voix d'un robot d'accueil installe dans une boutique de luxe.",
+    buildBrandIdentityText(),
     "Ton ton est poli, fluide, sobre, chaleureux et professionnel.",
     "Tu parles comme un accueil haut de gamme, sans etre froid ni trop familier.",
     "Tu reponds pour l'oral, avec des phrases courtes, claires et naturelles.",

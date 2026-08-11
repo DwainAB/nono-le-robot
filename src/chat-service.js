@@ -148,20 +148,24 @@ function localizeItemName(item, language) {
 }
 
 function buildGreetingWithFirstName(firstName, language) {
+  if (!firstName) {
+    return buildGenericHelpReply(language);
+  }
+
   switch (normalizeLanguage(language)) {
     case "en":
-      return "Hello, how can I help you?";
+      return `Hello ${firstName}, how can I help you?`;
     case "es":
-      return "Hola, ¿en qué puedo ayudarle?";
+      return `Hola ${firstName}, ¿en qué puedo ayudarle?`;
     case "ru":
-      return "Здравствуйте, чем я могу вам помочь?";
+      return `Здравствуйте, ${firstName}, чем я могу вам помочь?`;
     case "zh":
-      return "您好，我可以怎么帮助您？";
+      return `您好，${firstName}，我可以怎么帮助您？`;
     case "ar":
-      return "مرحبًا، كيف يمكنني مساعدتك؟";
+      return `مرحبًا ${firstName}، كيف يمكنني مساعدتك؟`;
     case "fr":
     default:
-      return "Bonjour, en quoi puis-je vous aider ?";
+      return `Bonjour ${firstName}, en quoi puis-je vous aider ?`;
   }
 }
 
@@ -1078,7 +1082,7 @@ export async function handleChat({ message, sessionId, language = "fr", navigabl
     reply = buildStoreInformationReply(matchedStoreInformation, resolvedLanguage);
   } else if (extractedFirstName) {
     updateFirstName(session.sessionId, extractedFirstName || trimmedMessage);
-    reply = buildGenericHelpReply(resolvedLanguage);
+    reply = buildGreetingWithFirstName(extractedFirstName, resolvedLanguage);
   } else if (aiResolution?.type === "none") {
     reply = buildUnknownLocationReply(resolvedLanguage);
   } else {
