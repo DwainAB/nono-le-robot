@@ -24,6 +24,7 @@ import {
   upsertProduct
 } from "./catalog-service.js";
 import { getKillswitchState, setKillswitchState } from "./killswitch-service.js";
+import { recordAppLaunch } from "./app-launch-service.js";
 import { uploadProductImage } from "./image-storage-service.js";
 import busboy from "busboy";
 
@@ -313,6 +314,19 @@ const server = createServer(async (request, response) => {
       sendJson(response, 200, {
         entries
       });
+    } catch (error) {
+      sendJson(response, 400, {
+        error: error.message || "Erreur inconnue"
+      });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/app/launch") {
+    try {
+      const body = await collectRequestBody(request);
+      const result = await recordAppLaunch(body.ipAddress);
+      sendJson(response, 200, result);
     } catch (error) {
       sendJson(response, 400, {
         error: error.message || "Erreur inconnue"

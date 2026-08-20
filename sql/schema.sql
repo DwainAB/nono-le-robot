@@ -211,3 +211,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 INSERT IGNORE INTO app_settings (id, killswitch_enabled) VALUES (1, 0);
+
+CREATE TABLE IF NOT EXISTS app_launches (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  ip_address VARCHAR(64) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_app_launches_created_at (created_at)
+);
